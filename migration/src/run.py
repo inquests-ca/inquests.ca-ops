@@ -3,15 +3,16 @@ from collections import defaultdict
 
 from openpyxl import load_workbook
 
-from db.session import create_session
+from db.session import get_sessionmaker
 from db.models import *
 
 
 # TODO: increase size limits on columns.
 class Migrator:
 
-    def __init__(self, data_source):
+    def __init__(self, data_source, db_url):
         self._data_source = data_source
+        self._session_maker = get_sessionmaker(db_url)
 
         # Mappings from input data IDs to new IDs.
         self._mapping_source_id = {}
@@ -35,11 +36,14 @@ class Migrator:
         # Start at 2nd row to ignore headers.
         return ws.iter_rows(min_row=2, values_only=True)
 
+    def _get_db_session(self):
+        return self._session_maker()
+
     def populate_sources(self):
         # TODO: consider cleaning source data to reduce logic here.
         # TODO: consider removing code field.
         # TODO: get ranks.
-        session = create_session()
+        session = self._get_db_session()
 
         for row in self._read_worksheet('caspio_source.xlsx'):
             rcode, rdescription = row
@@ -93,7 +97,7 @@ class Migrator:
 
     def populate_keywords(self):
         # TODO: populate description field or remove.
-        session = create_session()
+        session = self._get_db_session()
 
         for row in self._read_worksheet('caspio_keywords.xlsx'):
             rtype, rkeyword, rserial = row
@@ -125,7 +129,7 @@ class Migrator:
         session.commit()
 
     def populate_documents(self):
-        session = create_session()
+        session = self._get_db_session()
 
         processed_documents = set()
 
@@ -156,4 +160,5 @@ class Migrator:
 
 if __name__ == '__main__':
     data_source = sys.argv[1]
-    Migrator(data_source)
+    db_url = sys.argv[2]
+    Migrator(data_source, db_url)
