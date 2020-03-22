@@ -1,5 +1,5 @@
 # coding: utf-8
-from sqlalchemy import CHAR, Column, Date, String, Table
+from sqlalchemy import CHAR, Column, Date, String, Table, text
 from sqlalchemy.dialects.mysql import INTEGER, TINYINT
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -74,7 +74,7 @@ class Inquest(Base):
     sourceID = Column(CHAR(100), nullable=False)
     name = Column(String(255), nullable=False)
     description = Column(String(10000))
-    primary = Column(TINYINT(3))
+    primary = Column(TINYINT(3), server_default=text("'0'"))
 
 
 class Authority(Base):
@@ -84,7 +84,7 @@ class Authority(Base):
     inquestID = Column(INTEGER(10))
     name = Column(String(255))
     description = Column(String(10000))
-    primary = Column(TINYINT(3))
+    primary = Column(TINYINT(3), server_default=text("'0'"))
 
 
 class Deceased(Base):
@@ -104,7 +104,7 @@ class InquestDocuments(Base):
 
     inquestID = Column(INTEGER(10), primary_key=True, nullable=False)
     documentID = Column(INTEGER(10), primary_key=True, nullable=False)
-    primary = Column(TINYINT(4))
+    primary = Column(TINYINT(4), server_default=text("'0'"))
 
 
 class InquestKeywords(Base):
@@ -120,7 +120,7 @@ class AuthorityDocuments(Base):
     authorityID = Column(INTEGER(10), primary_key=True, nullable=False)
     documentID = Column(INTEGER(10), primary_key=True, nullable=False)
     sourceID = Column(CHAR(100))
-    primary = Column(TINYINT(4))
+    primary = Column(TINYINT(4), server_default=text("'0'"))
 
 
 class AuthorityKeywords(Base):

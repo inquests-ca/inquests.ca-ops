@@ -13,12 +13,11 @@ class Migrator:
     _AUTHORITY_TYPE_AUTHORITY = 'Authority'
     _AUTHORITY_TYPE_INQUEST = 'Inquest/Fatality Inquiry'
 
-    def __init__(self, data_source, db_url):
-        self._data_source = data_source
+    def __init__(self, data_path, db_url):
+        self._data_path = data_path
         self._session_maker = get_sessionmaker(db_url)
 
         # Mappings from input data IDs to new IDs.
-        # TODO: abstract with some getters.
         self._mapping_source_id = {}
         self._mapping_keyword_id = {}
         self._mapping_document_id = {}
@@ -44,13 +43,14 @@ class Migrator:
 
     def _read_worksheet(self, filename):
         """Returns iterator for rows in given Excel file."""
-        wb = load_workbook('{}/{}'.format(self._data_source, filename))
+        wb = load_workbook('{}/{}'.format(self._data_path, filename))
         ws = wb.active
 
         # Start at 2nd row to ignore headers.
         return ws.iter_rows(min_row=2, values_only=True)
 
     def _get_db_session(self):
+        """Return session object which is used to interface the database."""
         return self._session_maker()
 
     def _is_valid_authority_type(self, authority_type):
@@ -59,7 +59,7 @@ class Migrator:
     def populate_sources(self):
         # TODO: consider cleaning source data to reduce logic here.
         # TODO: consider removing code field.
-        # TODO: get ranks.
+        # TODO: populate rank field.
         print('[INFO] Populating sources.')
 
         session = self._get_db_session()
@@ -155,18 +155,8 @@ class Migrator:
 
         session = self._get_db_session()
 
-        processed_documents = set()
-
         for row in self._read_worksheet('caspio_docs.xlsx'):
             rauthorities, rserial, rshortname, rcitation, rdate, rlink, rlinktype = row
-
-            # Track IDs of documents that have already been processed to avoid duplicates, since one document could
-            # potentially be referenced by multiple authorities.
-            if rserial in processed_documents:
-                print('[WARNING] Skipping document with duplicate ID: {}'.format(rserial))
-                continue
-
-            processed_documents.add(rserial)
 
             model = Document(
                 name=rshortname,
@@ -185,7 +175,6 @@ class Migrator:
         session.commit()
 
     def populate_authorities_and_inquests(self):
-        # TODO: what are the KeywordsExtendedTxt, AuthRankCalc1, LinkToPdf_calc, AuthLink1Calc fields?
         # TODO: populate inquestID field of Authority model.
         # TODO: populate primary field of AuthorityDocuments, InquestDocuments models.
         # TODO: consider moving sourceID field to documents, despite normalization issues.
@@ -232,11 +221,10 @@ class Migrator:
                 session.flush()
                 authority_id = inquest.inquestID
 
-                # TODO: consistent casing of last name field.
                 deceased = Deceased(
                     inquestID=inquest.inquestID,
-                    lastName=rlastname,
-                    givenNames=rgivenname,
+                    lastName=rlastname.title(),
+                    givenNames=rgivenname.title(),
                     age=rage,
                     dateOfDeath=rdatedeath,
                     causeOfDeath=rdeathcause,
@@ -266,10 +254,11 @@ class Migrator:
                 if keyword == '':
                     continue
 
+                # Ignore references to keywords which do not exist.
                 if keyword not in self._mapping_keyword_id:
                     print(
-                         '[WARNING] No such keyword for authority with ID: {}, keyword: {}'
-                        .format(self._mapping_authority_id[rserial], keyword)
+                         '[WARNING] Invalid keyword {} referenced by authority with ID: {}'
+                        .format(keyword, self._mapping_authority_id[rserial])
                     )
                     continue
 
@@ -291,14 +280,13 @@ class Migrator:
                     session.flush()
                 except sqlalchemy.exc.IntegrityError as e:
                     print(
-                         '[WARNING] Invalid keyword for authority with ID: {}, keyword: {}'
-                        .format(self._mapping_authority_id[rserial], self._mapping_keyword_id[keyword])
+                         '[WARNING] Integrity error for keyword {} referenced by authority with ID: {}'
+                        .format(self._mapping_keyword_id[keyword], self._mapping_authority_id[rserial])
                     )
                     session.rollback()
                     continue
 
-            # More frequent commits are required since rollbacks may occur.
-            # TODO: better solution.
+            # Commit for each authority since a rollback may occur at any time.
             session.commit()
 
     def populate_authority_and_inquest_documents(self):
@@ -311,7 +299,7 @@ class Migrator:
                 # Ignore references to authorities which do not exist.
                 if authority not in self._authority_data:
                     print(
-                         '[WARNING] Invalid authority {} for document with ID: {}'
+                         '[WARNING] Invalid authority {} referenced by document with ID: {}'
                         .format(authority, document_id)
                     )
                     continue
@@ -339,6 +327,6 @@ class Migrator:
 
 
 if __name__ == '__main__':
-    data_source = sys.argv[1]
+    data_path = sys.argv[1]
     db_url = sys.argv[2]
-    Migrator(data_source, db_url)
+    Migrator(data_path, db_url)
