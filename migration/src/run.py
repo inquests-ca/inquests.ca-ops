@@ -62,7 +62,7 @@ class Migrator:
         # TODO: consider cleaning source data to reduce logic here.
         # TODO: consider removing code field.
         # TODO: get ranks.
-        print("[INFO] Populating sources.")
+        print('[INFO] Populating sources.')
 
         session = self._get_db_session()
 
@@ -75,29 +75,29 @@ class Migrator:
             code = None
             rank = 0
 
-            if rcode == "REF":
-                source_id = "REF"
-            elif rcode.startswith("UK"):
-                source_id = "UK_" + rcode[2:]
-                jurisdiction_id = "UK"
-            elif rcode.startswith("US"):
-                source_id = "US_" + rcode[2:]
-                jurisdiction_id = "US"
-            elif rcode == "CANLEG":
-                source_id = "CAD_LEG"
-                jurisdiction_id = "CAD"
-            elif rcode == "FCC":
-                source_id = "CAD_FCC"
-                jurisdiction_id = "CAD"
-                code = "FCC"
-            elif rcode == "SCC":
-                source_id = "CAD_SCC"
-                jurisdiction_id = "CAD"
-                code = "SCC"
+            if rcode == 'REF':
+                source_id = 'REF'
+            elif rcode.startswith('UK'):
+                source_id = 'UK_' + rcode[2:]
+                jurisdiction_id = 'UK'
+            elif rcode.startswith('US'):
+                source_id = 'US_' + rcode[2:]
+                jurisdiction_id = 'US'
+            elif rcode == 'CANLEG':
+                source_id = 'CAD_LEG'
+                jurisdiction_id = 'CAD'
+            elif rcode == 'FCC':
+                source_id = 'CAD_FCC'
+                jurisdiction_id = 'CAD'
+                code = 'FCC'
+            elif rcode == 'SCC':
+                source_id = 'CAD_SCC'
+                jurisdiction_id = 'CAD'
+                code = 'SCC'
             else:
                 # Assume all other sources are Canadian provinces and territories.
-                source_id = "CAD_" + rcode
-                jurisdiction_id = "CAD_" + rcode[:2]
+                source_id = 'CAD_' + rcode
+                jurisdiction_id = 'CAD_' + rcode[:2]
                 code = rcode
 
             source_id = source_id.upper()
@@ -118,7 +118,7 @@ class Migrator:
 
     def populate_keywords(self):
         # TODO: populate description field or remove.
-        print("[INFO] Populating keywords.")
+        print('[INFO] Populating keywords.')
 
         session = self._get_db_session()
 
@@ -126,7 +126,7 @@ class Migrator:
             rtype, rkeyword, rserial = row
 
             if not self._is_valid_authority_type(rtype):
-                print("[WARNING] Unknown authority type: {}".format(rtype))
+                print('[WARNING] Unknown authority type: {}'.format(rtype))
                 continue
 
             # Get keyword ID from keyword name (e.g., Cause-Fall from height -> CAUSE_FALL_FROM_HEIGHT).
@@ -153,7 +153,7 @@ class Migrator:
         session.commit()
 
     def populate_documents(self):
-        print("[INFO] Populating documents.")
+        print('[INFO] Populating documents.')
 
         session = self._get_db_session()
 
@@ -165,7 +165,7 @@ class Migrator:
             # Track IDs of documents that have already been processed to avoid duplicates, since one document could
             # potentially be referenced by multiple authorities.
             if rserial in processed_documents:
-                print("[WARNING] Skipping document with duplicate ID: {}".format(rserial))
+                print('[WARNING] Skipping document with duplicate ID: {}'.format(rserial))
                 continue
 
             processed_documents.add(rserial)
@@ -191,7 +191,7 @@ class Migrator:
         # TODO: populate inquestID field of Authority model.
         # TODO: populate primary field of AuthorityDocuments, InquestDocuments models.
         # TODO: consider moving sourceID field to documents, despite normalization issues.
-        print("[INFO] Populating authorities and inquests.")
+        print('[INFO] Populating authorities and inquests.')
 
         session = self._get_db_session()
 
@@ -204,7 +204,7 @@ class Migrator:
             rsource = row[16]
 
             if not self._is_valid_authority_type(rtype):
-                print("[WARNING] Unknown authority type: {}".format(rtype))
+                print('[WARNING] Unknown authority type: {}'.format(rtype))
                 continue
 
             self._authority_data[rserial] = (rtype, rsource)
@@ -238,7 +238,7 @@ class Migrator:
         session.commit()
 
     def populate_authority_and_inquest_keywords(self):
-        print("[INFO] Populating authority and inquest keywords.")
+        print('[INFO] Populating authority and inquest keywords.')
 
         session = self._get_db_session()
 
@@ -248,7 +248,7 @@ class Migrator:
             rkeywords = row[5]
 
             if not self._is_valid_authority_type(rtype):
-                print("[WARNING] Unknown authority type: {}".format(rtype))
+                print('[WARNING] Unknown authority type: {}'.format(rtype))
                 continue
 
             for keyword in rkeywords.split(','):
@@ -257,7 +257,7 @@ class Migrator:
 
                 if keyword not in self._mapping_keyword_id:
                     print(
-                         "[WARNING] No such keyword for authority with ID: {}, keyword: {}"
+                         '[WARNING] No such keyword for authority with ID: {}, keyword: {}'
                         .format(self._mapping_authority_id[rserial], keyword)
                     )
                     continue
@@ -280,7 +280,7 @@ class Migrator:
                     session.flush()
                 except sqlalchemy.exc.IntegrityError as e:
                     print(
-                         "[WARNING] Invalid keyword for authority with ID: {}, keyword: {}"
+                         '[WARNING] Invalid keyword for authority with ID: {}, keyword: {}'
                         .format(self._mapping_authority_id[rserial], self._mapping_keyword_id[keyword])
                     )
                     session.rollback()
@@ -291,7 +291,7 @@ class Migrator:
             session.commit()
 
     def populate_authority_and_inquest_documents(self):
-        print("[INFO] Populating authority and inquest documents.")
+        print('[INFO] Populating authority and inquest documents.')
 
         session = self._get_db_session()
 
@@ -300,7 +300,7 @@ class Migrator:
                 # Ignore references to authorities which do not exist.
                 if authority not in self._authority_data:
                     print(
-                         "[WARNING] Invalid authority {} for document with ID: {}"
+                         '[WARNING] Invalid authority {} for document with ID: {}'
                         .format(authority, document_id)
                     )
                     continue
