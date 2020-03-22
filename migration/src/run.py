@@ -8,7 +8,6 @@ from db.session import get_sessionmaker
 from db.models import *
 
 
-# TODO: increase size limits on columns.
 class Migrator:
 
     _AUTHORITY_TYPE_AUTHORITY = 'Authority'
