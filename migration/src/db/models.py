@@ -122,5 +122,5 @@ class AuthorityDocuments(Base):
 class AuthorityKeywords(Base):
     __tablename__ = 'authorityKeywords'
 
-    inquestID = Column('authorityID', INTEGER(10), primary_key=True, nullable=False)
-    inquestKeywordID = Column('authorityKeywordID', CHAR(50), primary_key=True, nullable=False)
+    authorityID = Column('authorityID', INTEGER(10), primary_key=True, nullable=False)
+    authorityKeywordID = Column('authorityKeywordID', CHAR(50), primary_key=True, nullable=False)
