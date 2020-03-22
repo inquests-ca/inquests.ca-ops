@@ -9,7 +9,6 @@ from db.models import *
 
 
 # TODO: increase size limits on columns.
-# TODO: single quotes.
 class Migrator:
 
     _AUTHORITY_TYPE_AUTHORITY = 'Authority'
@@ -202,6 +201,7 @@ class Migrator:
             rsynopsis = row[4]
             rprimary = row[9]
             rsource = row[16]
+            (rlastname, rgivenname, rage, rdatedeath, rdeathcause) = row[25:30]
 
             if not self._is_valid_authority_type(rtype):
                 print('[WARNING] Unknown authority type: {}'.format(rtype))
@@ -210,28 +210,40 @@ class Migrator:
             self._authority_data[rserial] = (rtype, rsource)
 
             if rtype == self._AUTHORITY_TYPE_AUTHORITY:
-                model = Authority(
+                authority = Authority(
                     inquestID=None,
                     name=rname,
                     description=rsynopsis,
                     primary=rprimary
                 )
-                session.add(model)
+                session.add(authority)
                 session.flush()
-                authority_id = model.authorityID
+                authority_id = authority.authorityID
             elif rtype == self._AUTHORITY_TYPE_INQUEST:
                 # Some inquests have their name prefixed with 'Inquest-'; this is redundant.
                 if rname.startswith('Inquest-'):
                     rname = rname[8:]
-                model = Inquest(
+                inquest = Inquest(
                     sourceID=self._mapping_source_id[rsource],
                     name=rname,
                     description=rsynopsis,
                     primary=rprimary
                 )
-                session.add(model)
+                session.add(inquest)
                 session.flush()
-                authority_id = model.inquestID
+                authority_id = inquest.inquestID
+
+                # TODO: consistent casing of last name field.
+                deceased = Deceased(
+                    inquestID=inquest.inquestID,
+                    lastName=rlastname,
+                    givenNames=rgivenname,
+                    age=rage,
+                    dateOfDeath=rdatedeath,
+                    causeOfDeath=rdeathcause,
+                )
+                session.add(deceased)
+                session.flush()
 
             self._mapping_authority_id[rserial] = authority_id
 

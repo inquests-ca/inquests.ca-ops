@@ -1,5 +1,5 @@
 # coding: utf-8
-from sqlalchemy import CHAR, Column, DateTime, String, Table
+from sqlalchemy import CHAR, Column, Date, String, Table
 from sqlalchemy.dialects.mysql import INTEGER, TINYINT
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -43,9 +43,9 @@ class Document(Base):
 
     documentID = Column(INTEGER(10), primary_key=True, autoincrement=True)
     name = Column(String(255))
-    date = Column(DateTime)
+    date = Column(Date)
     link = Column(String(1000))
-    documentType = Column(CHAR(255), comment='E.g., verdict, ruling, exhibit.\\nCan be NULL if document falls into misc. category.')
+    documentType = Column(CHAR(50), comment='E.g., verdict, ruling, exhibit.\\nCan be NULL if document falls into misc. category.')
 
 
 class Jurisdiction(Base):
@@ -61,7 +61,7 @@ class Source(Base):
     __tablename__ = 'source'
 
     sourceID = Column(CHAR(50), primary_key=True, comment='Generally concatenation of sovereignty code and court code (e.g., CAD_ONCA).')
-    jurisdictionID = Column(CHAR(50), nullable=False)
+    jurisdictionID = Column(CHAR(50))
     name = Column(String(255), nullable=False)
     code = Column(String(255))
     rank = Column(INTEGER(10), nullable=False, comment='Rank which determines the importance of the source, and whether it is binding.')
@@ -73,7 +73,7 @@ class Inquest(Base):
     inquestID = Column(INTEGER(10), primary_key=True, autoincrement=True)
     sourceID = Column(CHAR(50), nullable=False)
     name = Column(String(255), nullable=False)
-    description = Column(String(255))
+    description = Column(String(10000))
     primary = Column(TINYINT(3))
 
 
@@ -83,7 +83,7 @@ class Authority(Base):
     authorityID = Column(INTEGER(10), primary_key=True, autoincrement=True)
     inquestID = Column(INTEGER(10))
     name = Column(String(255))
-    description = Column(String(255))
+    description = Column(String(10000))
     primary = Column(TINYINT(3))
 
 
@@ -92,7 +92,11 @@ class Deceased(Base):
 
     deceasedID = Column(INTEGER(10), primary_key=True, autoincrement=True)
     inquestID = Column(INTEGER(10))
-    name = Column(String(255))
+    lastName = Column(String(255))
+    givenNames = Column(String(255))
+    age = Column(INTEGER(11))
+    dateOfDeath = Column(Date)
+    causeOfDeath = Column(String(255))
 
 
 class InquestDocuments(Base):
