@@ -10,7 +10,7 @@ class Authority(Base):
     __tablename__ = 'authority'
 
     authorityId = Column(INTEGER(10), primary_key=True)
-    primary = Column(TINYINT(3), server_default=text("'0'"))
+    isPrimary = Column(TINYINT(3), server_default=text("'0'"))
     name = Column(String(255))
     overview = Column(String(255))
     synopsis = Column(String(10000))
@@ -24,21 +24,6 @@ class AuthorityCategory(Base):
     authorityCategoryId = Column(CHAR(100), primary_key=True)
     name = Column(String(255), nullable=False)
     description = Column(String(255))
-
-
-class AuthorityDocumentType(Base):
-    __tablename__ = 'authorityDocumentType'
-
-    authorityDocumentTypeId = Column(CHAR(100), primary_key=True)
-    name = Column(String(255), nullable=False)
-    description = Column(String(255))
-
-
-class DeathManner(Base):
-    __tablename__ = 'deathManner'
-
-    deathMannerId = Column(CHAR(100), primary_key=True)
-    name = Column(String(255))
 
 
 class DocumentSource(Base):
@@ -55,28 +40,6 @@ class InquestCategory(Base):
     inquestCategoryId = Column(CHAR(100), primary_key=True)
     name = Column(String(255), nullable=False)
     description = Column(String(255))
-
-
-class InquestDocumentType(Base):
-    __tablename__ = 'inquestDocumentType'
-
-    inquestDocumentTypeId = Column(CHAR(100), primary_key=True)
-    name = Column(String(255), nullable=False)
-    description = Column(String(255))
-
-
-class InquestType(Base):
-    __tablename__ = 'inquestType'
-
-    inquestTypeId = Column(CHAR(100), primary_key=True)
-    name = Column(String(255))
-
-
-class JurisdictionCategory(Base):
-    __tablename__ = 'jurisdictionCategory'
-
-    jurisdictionCategoryId = Column(CHAR(100), primary_key=True, comment='For a country, its ISO code.')
-    name = Column(String(255), nullable=False, comment='Generally, but not always, a country')
 
 
 class AuthorityCitations(Base):
@@ -118,15 +81,6 @@ class InquestKeyword(Base):
     description = Column(String(255))
 
 
-class Jurisdiction(Base):
-    __tablename__ = 'jurisdiction'
-
-    jurisdictionId = Column(CHAR(100), primary_key=True, nullable=False, comment='Generally concatenation of sovereignty code and division code (e.g., CAD_ON).')
-    jurisdictionCategoryId = Column(CHAR(100), primary_key=True, nullable=False, comment='Generally, but not always, a country')
-    name = Column(String(255), comment='Generally a province, territory, or state. \\nNULL implies this jurisdiction is federal.')
-    federal = Column(TINYINT(3), server_default=text("'0'"))
-
-
 class AuthorityKeywords(Base):
     __tablename__ = 'authorityKeywords'
 
@@ -139,7 +93,7 @@ class Inquest(Base):
 
     inquestId = Column(INTEGER(10), primary_key=True)
     jurisdictionId = Column(CHAR(100), nullable=False)
-    primary = Column(TINYINT(3), server_default=text("'0'"))
+    isPrimary = Column(TINYINT(3), server_default=text("'0'"))
     name = Column(String(255), nullable=False)
     overview = Column(String(255))
     synopsis = Column(String(10000))
@@ -149,16 +103,7 @@ class Inquest(Base):
     end = Column(Date)
     sittingDays = Column(INTEGER(11))
     exhibits = Column(INTEGER(11))
-
-
-class Source(Base):
-    __tablename__ = 'source'
-
-    sourceId = Column(CHAR(100), primary_key=True, comment='Generally concatenation of sovereignty code and court code (e.g., CAD_ONCA).')
-    jurisdictionId = Column(CHAR(100))
-    name = Column(String(255), nullable=False)
-    code = Column(String(255))
-    rank = Column(INTEGER(10), nullable=False, comment='Rank which determines the importance of the source, and whether it is binding.')
+    remarks = Column(String(1000))
 
 
 class AuthorityDocument(Base):
@@ -168,7 +113,7 @@ class AuthorityDocument(Base):
     authorityId = Column(INTEGER(10), nullable=False)
     authorityDocumentTypeId = Column(CHAR(100))
     sourceId = Column(CHAR(100))
-    primary = Column(TINYINT(4), server_default=text("'0'"))
+    isPrimary = Column(TINYINT(4), server_default=text("'0'"))
     name = Column(String(255))
     citation = Column(String(255))
     created = Column(Date)
@@ -202,10 +147,16 @@ class InquestDocument(Base):
     inquestDocumentId = Column(INTEGER(10), primary_key=True)
     inquestId = Column(INTEGER(10), nullable=False)
     inquestDocumentTypeId = Column(CHAR(100), comment='E.g., verdict, ruling, exhibit.\\nCan be NULL if document falls into misc. category.')
-    documentSourceId = Column(CHAR(100))
     name = Column(String(255))
     created = Column(Date)
-    link = Column(String(1000))
+
+
+class InquestDocumentLinks(Base):
+    __tablename__ = 'inquestDocumentLinks'
+
+    inquestDocumentId = Column(INTEGER(10), primary_key=True)
+    documentSourceId = Column(CHAR(100), primary_key=True, nullable=False)
+    link = Column(String(1000), nullable=False)
 
 
 class InquestKeywords(Base):
