@@ -1,5 +1,6 @@
 import sys
 import re
+import datetime
 from collections import defaultdict
 
 import sqlalchemy
@@ -8,8 +9,6 @@ from openpyxl import load_workbook
 from db.session import get_sessionmaker
 from db.models import *
 
-
-# TODO: set not-null constraint on fields consistently.
 
 class Migrator:
 
@@ -25,7 +24,7 @@ class Migrator:
         self._mapping_keyword_id = {}
         self._mapping_authority_id = {}
 
-        # Maps authority IDs from input data to tuple containing authority type and source.
+        # Maps authority IDs from input data to a tuple of authority type and keywords.
         self._authority_data = {}
 
         # Maps authority IDs to tuple containing related authorities and cited authorities.
@@ -60,6 +59,12 @@ class Migrator:
     def _is_valid_authority_type(self, authority_type):
         return authority_type in [self._AUTHORITY_TYPE_AUTHORITY, self._AUTHORITY_TYPE_INQUEST]
 
+    def _authority_type_to_string(self, authority_type):
+        if authority_type == self._AUTHORITY_TYPE_AUTHORITY:
+            return "Authority"
+        elif authority_type == self._AUTHORITY_TYPE_INQUEST:
+            return "Inquest"
+
     def _format_as_id(self, name):
         """Formats string to an appropriate ID."""
         return (
@@ -71,27 +76,39 @@ class Migrator:
                 .replace('/', '_')
         )
 
-    def _format_date(self, date_str):
-        """Format date string into SQL-compatible date."""
-        if date_str == '':
+    def _nullable_to_string(self, string):
+        """Done to satisfy NULL constraints."""
+        if string is None:
+            return ''
+        return string.strip()
+
+    def _string_to_nullable(self, string):
+        """If string is empty, return None"""
+        if string is None or string.strip() == '':
             return None
-        elif re.match(r'\d{4}-\d{2}-\d{2}', date_str) is not None:
+        return string.strip()
+
+    def _format_date(self, date):
+        """Format date string into SQL-compatible date."""
+        if type(date) == datetime.datetime:
+            return date
+        elif date is None or date == '':
+            return None
+        elif re.match(r'\d{4}-\d{2}-\d{2}', date) is not None:
             # Date is already in valid format.
-            return date_str
+            return date
         else:
-            match = re.match(r'(\d{1,2})/(\d{1,2})/(\d{4})', date_str)
+            match = re.match(r'(\d{1,2})/(\d{1,2})/(\d{4})', date)
             if match is not None and len(match.groups()) == 3:
                 (month, day, year) = match.groups()
                 return "{}-{}-{}".format(year, month, day)
             else:
-                raise ValueError("Invalid date: {}".format(date_str))
+                raise ValueError("Invalid date: {}".format(date))
 
     def _get_source_mappings(self):
-        # TODO: resolve duplicates with Alberta Inquest Inquiry.
         return {
             'ABCA': 'CAD_ABCA',
             'ABCQB': 'CAD_ABCQB',
-            'ABFI': 'CAD_ABINQ',
             'ABINQ': 'CAD_ABINQ',
             'ABLEG': 'CAD_ABLEG',
             'BCCA': 'CAD_BCCA',
@@ -130,8 +147,8 @@ class Migrator:
         authority_categories = set()
         inquest_categories = set()
 
-        for row in self._read_worksheet('KeywordsLookup'):
-            rtype, rkeyword, _, rserial = row
+        for row in self._read_worksheet('Keywords'):
+            rtype, rkeyword, rserial = row
 
             if not self._is_valid_authority_type(rtype):
                 print('[WARNING] Unknown authority type: {}'.format(rtype))
@@ -210,24 +227,25 @@ class Migrator:
         }
 
         for row in self._read_worksheet('Authorities'):
-            (rserial, rname, _, rtype, rsynopsis, rkeywords, _, rquotes, rnotes, rprimary, rsourcerank, _,
-                roverview, _, _, rjurisdiction, rsource, _, rprimarydoc, _, rcited, rrelated, _, _, _, rlastname,
-                rgivennames, rage, rdeathdate, rcause, rinqtype, rpresidingofficer, rsex, rstart, rend) = row
+            (rserial, rname, _, rtype, rsynopsis, rkeywords, _, rquotes, rnotes, rprimary, _, _,
+                roverview, _, _, rjurisdiction, _, _, rprimarydoc, _, rcited, rrelated, _, _, _,
+                rlastname, rgivennames, rdeathdate, rcause, rinqtype, rpresidingofficer, rsex, rage,
+                rstart, rend, _) = row
 
             if not self._is_valid_authority_type(rtype):
                 print('[WARNING] Unknown authority type: {}'.format(rtype))
                 continue
 
-            self._authority_data[rserial] = (rtype, rsource)
+            self._authority_data[rserial] = (rtype, rkeywords)
 
             if rtype == self._AUTHORITY_TYPE_AUTHORITY:
                 authority = Authority(
-                    primary=rprimary,
+                    isPrimary=rprimary,
                     name=rname,
-                    overview=roverview,
-                    synopsis=rsynopsis,
-                    quotes=rquotes,
-                    notes=rnotes
+                    overview=self._nullable_to_string(roverview),
+                    synopsis=self._nullable_to_string(rsynopsis),
+                    quotes=self._string_to_nullable(rquotes),
+                    notes=self._string_to_nullable(rnotes)
                 )
                 session.add(authority)
                 session.flush()
@@ -260,12 +278,12 @@ class Migrator:
 
                 inquest = Inquest(
                     jurisdictionId=jurisdiction,
-                    primary=rprimary,
+                    isPrimary=rprimary,
                     name=rname,
                     overview=None,
                     synopsis=synopsis,
-                    notes=rnotes,
-                    presidingOfficer=rpresidingofficer,
+                    notes=self._string_to_nullable(rnotes),
+                    presidingOfficer=self._nullable_to_string(rpresidingofficer),
                     start=self._format_date(rstart),
                     end=self._format_date(rend),
                     sittingDays=None,
@@ -287,16 +305,24 @@ class Migrator:
                 else:
                     inquest_type_id = self._format_as_id(inquest_type)
 
+                if rlastname == 'YOUTH' and self._string_to_nullable(rgivennames) is None:
+                    # Names not available as by the Youth Criminal Justice Act.
+                    last_name = None
+                    given_names = None
+                else:
+                    last_name = rlastname.title()
+                    given_names = rgivennames.title()
+
                 deceased = Deceased(
                     inquestId=authority_id,
                     inquestTypeId=inquest_type_id,
                     deathMannerId=death_manner_id,
                     deathCause=rcause,
                     deathDate=self._format_date(rdeathdate),
-                    lastName=rlastname.title(),
-                    givenNames=rgivennames.title(),
+                    lastName=last_name,
+                    givenNames=given_names,
                     age=rage,
-                    sex=None
+                    sex=(rsex if rsex != '?' else None)
                 )
                 session.add(deceased)
                 session.flush()
@@ -325,7 +351,7 @@ class Migrator:
                         )
                         continue
 
-                    authority_type, authority_source = self._authority_data[authority]
+                    authority_type, _ = self._authority_data[authority]
 
                     # Ignore references to inquests.
                     if authority_type == self._AUTHORITY_TYPE_INQUEST:
@@ -354,7 +380,7 @@ class Migrator:
                         )
                         continue
 
-                    authority_type, authority_source = self._authority_data[authority]
+                    authority_type, _ = self._authority_data[authority]
 
                     if authority_type == self._AUTHORITY_TYPE_INQUEST:
                         session.add(AuthorityInquests(
@@ -375,35 +401,30 @@ class Migrator:
 
         session = self._get_db_session()
 
-        for row in self._read_worksheet('Authorities'):
-            rserial = row[0]
-            rtype = row[3]
-            rkeywords = row[5]
-
-            if not self._is_valid_authority_type(rtype):
-                print('[WARNING] Unknown authority type: {}'.format(rtype))
-                continue
-
-            for keyword in rkeywords.split(','):
+        for serial, (authority_type, keywords) in self._authority_data.items():
+            for keyword in keywords.split(','):
                 if keyword == '' or keyword == 'zz_NotYetClassified':
                     continue
 
                 # Ignore references to keywords which do not exist.
                 if keyword not in self._mapping_keyword_id:
                     print(
-                         '[WARNING] Invalid keyword {} referenced by authority with ID: {}'
-                        .format(keyword, self._mapping_authority_id[rserial])
+                         '[WARNING] Invalid keyword {} referenced by {} with ID: {}'
+                        .format(
+                            keyword,
+                            self._authority_type_to_string(rtype),
+                            serial)
                     )
                     continue
 
-                if rtype == self._AUTHORITY_TYPE_AUTHORITY:
+                if authority_type == self._AUTHORITY_TYPE_AUTHORITY:
                     model = AuthorityKeywords(
-                        authorityId=self._mapping_authority_id[rserial],
+                        authorityId=self._mapping_authority_id[serial],
                         authorityKeywordId=self._mapping_keyword_id[keyword],
                     )
-                elif rtype == self._AUTHORITY_TYPE_INQUEST:
+                elif authority_type == self._AUTHORITY_TYPE_INQUEST:
                     model = InquestKeywords(
-                        inquestId=self._mapping_authority_id[rserial],
+                        inquestId=self._mapping_authority_id[serial],
                         inquestKeywordId=self._mapping_keyword_id[keyword],
                     )
 
@@ -414,8 +435,12 @@ class Migrator:
                     session.flush()
                 except sqlalchemy.exc.IntegrityError as e:
                     print(
-                         '[WARNING] Integrity error for keyword {} referenced by authority with ID: {}'
-                        .format(self._mapping_keyword_id[keyword], self._mapping_authority_id[rserial])
+                         '[WARNING] Integrity error for keyword {} referenced by {} with ID: {}'
+                        .format(
+                            self._mapping_keyword_id[keyword],
+                            self._authority_type_to_string(authority_type),
+                            serial
+                        )
                     )
                     session.rollback()
                     continue
@@ -430,8 +455,8 @@ class Migrator:
 
         document_sources = set()
 
-        for row in self._read_worksheet('Docs'):
-            rauthorities, rserial, rshortname, rcitation, rdate, rlink, rlinktype = row
+        for row in self._read_worksheet('Documents'):
+            rauthorities, rserial, rshortname, rcitation, rdate, rlink, rlinktype, rsource = row
 
             # Create document source type (i.e., the location where the document is stored) if it does not exist.
             if 'inquests.ca' in rlinktype.lower():
@@ -460,14 +485,14 @@ class Migrator:
                     )
                     continue
 
-                authority_type, authority_source = self._authority_data[authority]
+                authority_type, _ = self._authority_data[authority]
 
                 if authority_type == self._AUTHORITY_TYPE_AUTHORITY:
                     authority_document = AuthorityDocument(
                         authorityId=self._mapping_authority_id[authority],
                         authorityDocumentTypeId=None,
-                        sourceId=self._mapping_source_id[authority_source],
-                        primary=rcitation == self._rel_authority_to_primary_document[authority],
+                        sourceId=self._mapping_source_id[rsource],
+                        isPrimary=rcitation == self._rel_authority_to_primary_document[authority],
                         name=rshortname,
                         citation=rcitation,
                         created=self._format_date(rdate),
@@ -486,12 +511,17 @@ class Migrator:
                         document_name = rshortname.replace('Inquest-', '')
                     else:
                         document_name = rshortname
-                    session.add(InquestDocument(
+                    inquest_document = InquestDocument(
                         inquestId=self._mapping_authority_id[authority],
                         inquestDocumentTypeId=None,
-                        documentSourceId=document_source_id,
                         name=document_name,
                         created=self._format_date(rdate),
+                    )
+                    session.add(inquest_document)
+                    session.flush()
+                    session.add(InquestDocumentLinks(
+                        inquestDocumentId=inquest_document.inquestDocumentId,
+                        documentSourceId=document_source_id,
                         link=rlink,
                     ))
                     session.flush()
