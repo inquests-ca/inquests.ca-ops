@@ -80,11 +80,17 @@ class Migrator:
         """Done to satisfy NULL constraints."""
         if string is None:
             return ''
-        return string.strip()
+        return self._format_string(string)
 
     def _string_to_nullable(self, string):
         """If string is empty, return None"""
         if string is None or string.strip() == '':
+            return None
+        return self._format_string(string)
+
+    def _format_string(self, string):
+        """Format string before inserting into database. Currently only trims whitespace."""
+        if string is None:
             return None
         return string.strip()
 
@@ -158,6 +164,9 @@ class Migrator:
             # Otherwise, use 'General' as the default category.
             if '-' in rkeyword:
                 category = (rkeyword.split('-', 1)[0])
+            elif rkeyword == 'Evidence General':
+                # Special case where - is not used.
+                category = 'Evidence'
             else:
                 category = 'General'
 
@@ -166,14 +175,14 @@ class Migrator:
             if rtype == self._AUTHORITY_TYPE_AUTHORITY and category_id not in authority_categories:
                 session.add(AuthorityCategory(
                     authorityCategoryId=category_id,
-                    name=category.title(),
+                    name=self._format_string(category.title()),
                     description=None
                 ))
                 authority_categories.add(category_id)
             elif rtype == self._AUTHORITY_TYPE_INQUEST and category_id not in inquest_categories:
                 session.add(InquestCategory(
                     inquestCategoryId=category_id,
-                    name=category.title(),
+                    name=self._format_string(category.title()),
                     description=None
                 ))
                 inquest_categories.add(category_id)
@@ -212,36 +221,34 @@ class Migrator:
         session = self._get_db_session()
 
         inquest_types = {
-            'construction',
-            'custody-inmate',
-            'custody-police',
-            'discretionary',
-            'mining',
+            'CONSTRUCTION',
+            'CUSTODY_INMATE',
+            'CUSTODY_POLICE',
+            'DISCRETIONARY',
+            'MINING',
         }
         death_manners = {
-            'accident',
-            'homicide',
-            'suicide',
-            'natural',
-            'undetermined',
+            'ACCIDENT',
+            'HOMICIDE',
+            'SUICIDE',
+            'NATURAL',
+            'UNDETERMINED',
         }
 
         for row in self._read_worksheet('Authorities'):
             (rserial, rname, _, rtype, rsynopsis, rkeywords, _, rquotes, rnotes, rprimary, _, _,
                 roverview, _, _, rjurisdiction, _, _, rprimarydoc, _, rcited, rrelated, _, _, _,
                 rlastname, rgivennames, rdeathdate, rcause, rinqtype, rpresidingofficer, rsex, rage,
-                rstart, rend, _) = row
+                rstart, rend, _, _, _, _, _, rdeathmanner) = row
 
             if not self._is_valid_authority_type(rtype):
                 print('[WARNING] Unknown authority type: {}'.format(rtype))
                 continue
 
-            self._authority_data[rserial] = (rtype, rkeywords)
-
             if rtype == self._AUTHORITY_TYPE_AUTHORITY:
                 authority = Authority(
                     isPrimary=rprimary,
-                    name=rname,
+                    name=self._format_string(rname),
                     overview=self._nullable_to_string(roverview),
                     synopsis=self._nullable_to_string(rsynopsis),
                     quotes=self._string_to_nullable(rquotes),
@@ -260,28 +267,20 @@ class Migrator:
                 if rname.startswith('Inquest-'):
                     rname = rname.replace('Inquest-', '', 1)
 
-                # Parse manner of death (e.g., accident, homicide) and description from inquest synopsis.
-                match = re.search(r'(?<=Manner of Death: )(.*)\s*((.|\n)*)', rsynopsis)
+                # Parse description from inquest synopsis.
+                match = re.search(r'Manner of Death: .*\s*((.|\n)*)', rsynopsis)
                 if match is None:
                     # Assume that inquest synopsis only contains description of inquest.
-                    synopsis = rsynopsis.strip()
-                    death_manner_id = None
+                    synopsis = rsynopsis
                 else:
-                    synopsis = match.group(2).strip()
-                    inquest_death_manner = match.group(1).strip()
-                    for death_manner in death_manners:
-                        if inquest_death_manner.lower().startswith(death_manner[0]):
-                            death_manner_id = self._format_as_id(death_manner)
-                            break
-                    else:
-                        print('[WARNING] Invalid manner of death: {}'.format(inquest_death_manner))
+                    synopsis = match.group(1)
 
                 inquest = Inquest(
                     jurisdictionId=jurisdiction,
                     isPrimary=rprimary,
-                    name=rname,
+                    name=self._format_string(rname),
                     overview=None,
-                    synopsis=synopsis,
+                    synopsis=self._format_string(synopsis),
                     notes=self._string_to_nullable(rnotes),
                     presidingOfficer=self._nullable_to_string(rpresidingofficer),
                     start=self._format_date(rstart),
@@ -293,31 +292,43 @@ class Migrator:
                 session.flush()
                 authority_id = inquest.inquestId
 
-                # Get inquest type.
+                # Validate inquest type.
                 if rinqtype.startswith('Mandatory-'):
                     # An inquest is either 'Discretionary' or 'Mandatory-<reason>'; this makes 'Mandatory' redundant.
                     inquest_type = rinqtype.replace('Mandatory-', '')
                 else:
                     inquest_type = rinqtype
-                if inquest_type.lower() not in inquest_types:
-                    print('[WARNING] Invalid inquest type: {}'.format(inquest_type))
-                    inquest_type_id = None
-                else:
-                    inquest_type_id = self._format_as_id(inquest_type)
+
+                inquest_type_id = self._format_as_id(inquest_type)
+                if inquest_type_id not in inquest_types:
+                    print(
+                        '[WARNING] Invalid inquest type: {} referenced by Inquest with ID: {}. Defaulting to "OTHER".'
+                        .format(inquest_type, rserial)
+                    )
+                    inquest_type_id = 'OTHER'
+
+                # Validate manner of death.
+                death_manner_id = self._format_as_id(rdeathmanner)
+                if death_manner_id not in death_manners:
+                    print(
+                        '[WARNING] Invalid manner of death {} referenced by Inquest with ID: {}. Defaulting to "OTHER".'
+                        .format(rdeathmanner, rserial)
+                    )
+                    death_manner_id = 'OTHER'
 
                 if rlastname == 'YOUTH' and self._string_to_nullable(rgivennames) is None:
                     # Names not available as by the Youth Criminal Justice Act.
                     last_name = None
                     given_names = None
                 else:
-                    last_name = rlastname.title()
-                    given_names = rgivennames.title()
+                    last_name = self._format_string(rlastname.title())
+                    given_names = self._format_string(rgivennames.title())
 
                 deceased = Deceased(
                     inquestId=authority_id,
                     inquestTypeId=inquest_type_id,
                     deathMannerId=death_manner_id,
-                    deathCause=rcause,
+                    deathCause=self._format_string(rcause),
                     deathDate=self._format_date(rdeathdate),
                     lastName=last_name,
                     givenNames=given_names,
@@ -327,6 +338,7 @@ class Migrator:
                 session.add(deceased)
                 session.flush()
 
+            self._authority_data[rserial] = (rtype, rkeywords)
             self._mapping_authority_id[rserial] = authority_id
 
         session.commit()
@@ -435,7 +447,7 @@ class Migrator:
                     session.flush()
                 except sqlalchemy.exc.IntegrityError as e:
                     print(
-                         '[WARNING] Integrity error for keyword {} referenced by {} with ID: {}'
+                         '[WARNING] Invalid keyword {} referenced by {} with ID: {}'
                         .format(
                             self._mapping_keyword_id[keyword],
                             self._authority_type_to_string(authority_type),
@@ -467,10 +479,17 @@ class Migrator:
             if document_source_id not in document_sources:
                 session.add(DocumentSource(
                     documentSourceId=document_source_id,
-                    name=document_source,
+                    name=self._format_string(document_source),
                 ))
                 session.flush()
                 document_sources.add(document_source_id)
+
+            # Ensure document references at least one authority.
+            if not any(rauthorities.split('\n')):
+                print(
+                     '[WARNING] Document {} does not reference any authorities.'
+                    .format(rserial)
+                )
 
             # Map authority or inquest to its documents.
             for authority in rauthorities.split('\n'):
@@ -493,8 +512,8 @@ class Migrator:
                         authorityDocumentTypeId=None,
                         sourceId=self._mapping_source_id[rsource],
                         isPrimary=rcitation == self._rel_authority_to_primary_document[authority],
-                        name=rshortname,
-                        citation=rcitation,
+                        name=self._format_string(rshortname),
+                        citation=self._format_string(rcitation),
                         created=self._format_date(rdate),
                     )
                     session.add(authority_document)
@@ -502,7 +521,7 @@ class Migrator:
                     session.add(AuthorityDocumentLinks(
                         authorityDocumentId=authority_document.authorityDocumentId,
                         documentSourceId=document_source_id,
-                        link=rlink,
+                        link=self._format_string(rlink),
                     ))
                     session.flush()
                 elif authority_type == self._AUTHORITY_TYPE_INQUEST:
@@ -514,7 +533,7 @@ class Migrator:
                     inquest_document = InquestDocument(
                         inquestId=self._mapping_authority_id[authority],
                         inquestDocumentTypeId=None,
-                        name=document_name,
+                        name=self._format_string(document_name),
                         created=self._format_date(rdate),
                     )
                     session.add(inquest_document)
@@ -522,7 +541,7 @@ class Migrator:
                     session.add(InquestDocumentLinks(
                         inquestDocumentId=inquest_document.inquestDocumentId,
                         documentSourceId=document_source_id,
-                        link=rlink,
+                        link=self._format_string(rlink),
                     ))
                     session.flush()
 
