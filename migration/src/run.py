@@ -44,6 +44,9 @@ class Migrator:
         self.populate_authority_and_inquest_keywords()
         self.populate_documents()
 
+        # Run checks to ensure data is valid.
+        self.validate()
+
     def _read_worksheet(self, sheet):
         """Returns iterator for rows in given Excel file."""
         wb = load_workbook(self._file_path)
@@ -546,6 +549,109 @@ class Migrator:
                     session.flush()
 
         session.commit()
+
+    def validate(self):
+        print('[INFO] Running SQL validation scripts.')
+
+        session = self._get_db_session()
+
+        # Invert mapping of authority IDs to map new IDs to input IDs.
+        authority_serials = [
+            serial for (serial, (authority_type, _)) in self._authority_data.items()
+            if authority_type == self._AUTHORITY_TYPE_AUTHORITY
+        ]
+        inverse_mapping_authority_id = {
+            new_id: serial for serial, new_id in self._mapping_authority_id.items()
+            if serial in authority_serials
+        }
+        inverse_mapping_inquest_id = {
+            new_id: serial for serial, new_id in self._mapping_authority_id.items()
+            if serial not in authority_serials
+        }
+
+        # Ensure each authority has exactly one primary document.
+        query = sqlalchemy.text("""
+            SELECT authority.authorityId, authorityDocument.isPrimary, COUNT(authority.authorityId) AS cnt
+            FROM authority
+            LEFT JOIN authorityDocument ON authority.authorityId = authorityDocument.authorityId AND authorityDocument.isPrimary = 1
+            GROUP BY authority.authorityId, authorityDocument.isPrimary
+            HAVING authorityDocument.isPrimary IS NULL OR cnt > 1;
+        """)
+        rows = session.execute(query).fetchall()
+
+        for row in rows:
+            authority_id, has_primary, count = row
+            if not has_primary:
+                count = 0
+            print(
+                 '[WARNING] Authority {} has {} primary documents.'
+                .format(inverse_mapping_authority_id[authority_id], count)
+            )
+
+        # Ensure each inquest has at least one document.
+        query = sqlalchemy.text("""
+            SELECT inquest.inquestId
+            FROM inquest
+            LEFT JOIN inquestDocument ON inquest.inquestId = inquestDocument.inquestId
+            WHERE inquestDocument.inquestId IS NULL;
+        """)
+        rows = session.execute(query).fetchall()
+
+        for row in rows:
+            inquest_id = row[0]
+            print(
+                 '[WARNING] Inquest {} does not have any documents.'
+                .format(inverse_mapping_inquest_id[inquest_id], count)
+            )
+
+        # Ensure each authority has at least one keyword.
+        query = sqlalchemy.text("""
+            SELECT authority.authorityId
+            FROM authority
+            LEFT JOIN authorityKeywords ON authorityKeywords.authorityId = authority.authorityId
+            WHERE authorityKeywords.authorityId IS NULL;
+        """)
+        rows = session.execute(query).fetchall()
+
+        for row in rows:
+            authority_id = row[0]
+            print(
+                 '[WARNING] Authority {} does not have any keywords.'
+                .format(inverse_mapping_authority_id[authority_id], count)
+            )
+
+        # Ensure each inquest has at least one keyword.
+        query = sqlalchemy.text("""
+            SELECT inquest.inquestId
+            FROM inquest
+            LEFT JOIN inquestKeywords ON inquestKeywords.inquestId = inquest.inquestId
+            WHERE inquestKeywords.inquestId IS NULL;
+        """)
+        rows = session.execute(query).fetchall()
+
+        for row in rows:
+            inquest_id = row[0]
+            print(
+                 '[WARNING] Inquest {} does not have any keywords.'
+                .format(inverse_mapping_inquest_id[inquest_id], count)
+            )
+
+        # Ensure each inquest has at least one CAUSE keyword.
+        query = sqlalchemy.text("""
+            SELECT inquest.inquestId
+            FROM inquestKeywords
+            INNER JOIN inquestKeyword ON inquestKeyword.inquestKeywordId = inquestKeywords.inquestKeywordId AND inquestKeyword.inquestCategoryId = 'CAUSE'
+            RIGHT JOIN inquest ON inquest.inquestId = inquestKeywords.inquestId
+            WHERE inquestKeywords.inquestId IS NULL;
+        """)
+        rows = session.execute(query).fetchall()
+
+        for row in rows:
+            inquest_id = row[0]
+            print(
+                 '[WARNING] Inquest {} does not have any CAUSE keywords.'
+                .format(inverse_mapping_inquest_id[inquest_id], count)
+            )
 
 
 if __name__ == '__main__':
