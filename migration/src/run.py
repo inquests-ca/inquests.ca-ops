@@ -308,7 +308,7 @@ class Migrator:
                     description=None
                 ))
                 inquest_categories.add(category_id)
-            session.commit()
+            session.flush()
 
             # Get keyword ID from keyword name (e.g., Cause-Fall from height -> CAUSE_FALL_FROM_HEIGHT).
             keyword_id = self._format_as_id(rkeyword)
@@ -331,9 +331,7 @@ class Migrator:
                     name=keyword_name,
                     description=None,
                 )
-
             session.add(model)
-            session.flush()
 
         session.commit()
 
@@ -456,7 +454,6 @@ class Migrator:
                     sex=(rsex if rsex != '?' else None)
                 )
                 session.add(deceased)
-                session.flush()
 
             self._authority_serial_to_type[rserial] = rtype
             self._authority_serial_to_name[rserial] = self._format_string(rname)
@@ -497,7 +494,6 @@ class Migrator:
                         authorityId=authority_id,
                         citedAuthorityId=self._authority_serial_to_id[authority_serial],
                     ))
-                    session.flush()
 
             if related is not None:
                 for authority_serial in related.split('\n'):
@@ -522,7 +518,6 @@ class Migrator:
                             authorityId=authority_id,
                             relatedAuthorityId=self._authority_serial_to_id[authority_serial],
                         ))
-                    session.flush()
 
         session.commit()
 
@@ -608,7 +603,7 @@ class Migrator:
 
                 # Upload document to S3 if respective file exists locally.
                 link = self._format_string(rlink)
-                if rlink is not None and rlink.strip() == self._404_LINK:
+                if rlink.strip() == self._404_LINK:
                     print(
                          '[DEBUG] 404 link, not uploading document with ID: {}'
                         .format(rserial)
@@ -641,7 +636,6 @@ class Migrator:
                         documentSourceId=document_source_id,
                         link=link,
                     ))
-                    session.flush()
                 else:
                     if rshortname.startswith('Inquest-'):
                         # Some inquest documents begin with 'Inquest-'; this is redundant.
@@ -662,7 +656,6 @@ class Migrator:
                         documentSourceId=document_source_id,
                         link=link,
                     ))
-                    session.flush()
 
         session.commit()
 
