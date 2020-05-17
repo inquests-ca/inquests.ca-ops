@@ -1,12 +1,16 @@
+import os
 import sys
 import re
 import datetime
 from collections import defaultdict
 
+import boto3
+import botocore
 import sqlalchemy
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 from openpyxl import load_workbook
 
-from db.session import get_sessionmaker
 from db.models import *
 
 
@@ -15,23 +19,28 @@ class Migrator:
     _AUTHORITY_TYPE_AUTHORITY = 'Authority'
     _AUTHORITY_TYPE_INQUEST = 'Inquest/Fatality Inquiry'
 
-    def __init__(self, file_path, db_url):
-        self._file_path = file_path
-        self._session_maker = get_sessionmaker(db_url)
+    _404_LINK = 'https://www.dropbox.com/s/zs9toyx40takmi6/UrlPendingError.pdf?dl=0'
 
-        # Mappings from input data IDs to new IDs.
-        self._mapping_source_id = self._get_source_mappings()
-        self._mapping_keyword_id = {}
-        self._mapping_authority_id = {}
+    def __init__(self, data_file_path, document_files_directory, db_url, upload_documents):
+        self._data_file_path = data_file_path
+        self._document_files_directory = document_files_directory
+        self._session_maker = self._init_session_maker(db_url)
+        self._upload_documents = upload_documents
+        self._s3_client, self._s3_client_url_generator = self._init_s3_clients()
 
-        # Maps authority IDs from input data to a tuple of authority type and keywords.
-        self._authority_data = {}
+        # Mappings from input data attributes to new IDs.
+        self._source_serial_to_id = self._get_source_mappings()
+        self._jurisdiction_serial_to_id = self._get_jurisdiction_mappings()
+        self._authority_keyword_name_to_id = {}
+        self._inquest_keyword_name_to_id = {}
+        self._authority_serial_to_id = {}
 
-        # Maps authority IDs to tuple containing related authorities and cited authorities.
-        self._authority_related = {}
-
-        # Mappings of relationships between models.
-        self._rel_authority_to_primary_document = {}         # Uses input authority ID, document citation.
+        # Mappings from authority serial to various attributes.
+        self._authority_serial_to_related = {}          # Tuple of related authorities and cited authorities.
+        self._authority_serial_to_type = {}             # Type being either authority or inquest.
+        self._authority_serial_to_name = {}
+        self._authority_serial_to_keywords = {}
+        self._authority_serial_to_primary_document = {}
 
         # This operation must be done first to satisfy FK constraints.
         self.populate_keywords()
@@ -47,26 +56,28 @@ class Migrator:
         # Run checks to ensure data is valid.
         self.validate()
 
+    def _init_session_maker(self, db_url):
+        """Create session maker which will be used to initiate database connections."""
+        engine = create_engine(db_url)
+        Session = sessionmaker(bind=engine)
+        return Session
+
+    def _init_s3_clients(self):
+        """Create S3 client used to interface the inquests-ca-resources S3 bucket."""
+        session = boto3.Session(profile_name='migration')
+        config = botocore.client.Config(signature_version=botocore.UNSIGNED)
+        return session.client('s3'), session.client('s3', config=config)
+
     def _read_worksheet(self, sheet):
         """Returns iterator for rows in given Excel file."""
-        wb = load_workbook(self._file_path)
+        wb = load_workbook(self._data_file_path)
         ws = wb[sheet]
 
         # Start at 2nd row to ignore headers.
         return ws.iter_rows(min_row=2, values_only=True)
 
-    def _get_db_session(self):
-        """Return session object which is used to interface the database."""
-        return self._session_maker()
-
     def _is_valid_authority_type(self, authority_type):
         return authority_type in [self._AUTHORITY_TYPE_AUTHORITY, self._AUTHORITY_TYPE_INQUEST]
-
-    def _authority_type_to_string(self, authority_type):
-        if authority_type == self._AUTHORITY_TYPE_AUTHORITY:
-            return "Authority"
-        elif authority_type == self._AUTHORITY_TYPE_INQUEST:
-            return "Inquest"
 
     def _format_as_id(self, name):
         """Formats string to an appropriate ID."""
@@ -114,6 +125,43 @@ class Migrator:
             else:
                 raise ValueError("Invalid date: {}".format(date))
 
+    def _get_year_from_date(self, date):
+        """Get year from date; note that date may be one of many types or formats."""
+        if type(date) == datetime.datetime:
+            return str(date.year)
+        elif date is None or date == '':
+            return None
+        elif re.match(r'\d{4}-\d{2}-\d{2}', date) is not None:
+            return date[:4]
+        elif re.match(r'\d{1,2}/\d{1,2}/\d{4}', date) is not None:
+            return date[-4:]
+        else:
+            raise ValueError("Invalid date: {}".format(date))
+
+    def _format_s3_key_segment(self, string):
+        """Replaces certain characters in the given string to avoid the need for URL encoding."""
+        return re.sub(r'[^a-zA-Z0-9]+', '-', string).strip('-')
+
+    def _get_jurisdiction_mappings(self):
+        return {
+            'CAN': 'CAD',
+            'AB': 'CAD_AB',
+            'BC': 'CAD_BC',
+            'MB': 'CAD_MB',
+            'NB': 'CAD_NB',
+            'NL': 'CAD_NL',
+            'NS': 'CAD_NS',
+            'NT': 'CAD_NT',
+            'NU': 'CAD_NU',
+            'ON': 'CAD_ON',
+            'PE': 'CAD_PE',
+            'QC': 'CAD_QC',
+            'SK': 'CAD_SK',
+            'YK': 'CAD_YK',
+            'UK': 'UK',
+            'US': 'US',
+        }
+
     def _get_source_mappings(self):
         return {
             'ABCA': 'CAD_ABCA',
@@ -147,11 +195,82 @@ class Migrator:
             'REF': 'REF',
         }
 
+    def _upload_document_if_exists(self, name, date, source, serial, authority_serial):
+        """Upload document file to S3 if one exists locally."""
+        # Get file path.
+        directory = os.path.join(self._document_files_directory, serial.strip())
+        documents = list(os.scandir(directory)) if os.path.isdir(directory) else []
+
+        # Ensure there is exactly one file per document directory.
+        if len(documents) != 1:
+            print(
+                 '[WARNING] Document {} has invalid number of files: {}.'
+                .format(serial, len(documents))
+            )
+            return None
+
+        file_path = documents[0].path
+
+        year = self._get_year_from_date(date)
+
+        # Generate S3 key for the given document with the form:
+        # <source>/<year>/<authority name>/<document name>
+        authority_name = self._authority_serial_to_name[authority_serial]
+        key = '/'.join([
+            self._format_s3_key_segment(source),
+            self._format_s3_key_segment(year) if year is not None else 'UnknownDate',
+            self._format_s3_key_segment(authority_name),
+            self._format_s3_key_segment(name),
+        ]) + '.pdf'
+
+        bucket = 'inquests-ca-resources'
+
+        # Currently no other way to get the object link with the Boto client.
+        # See https://stackoverflow.com/a/48197877
+        link = self._s3_client_url_generator.generate_presigned_url(
+            'get_object',
+            ExpiresIn=0,
+            Params={
+                'Bucket': bucket,
+                'Key': key
+            }
+        )
+
+        if not self._upload_documents:
+            return link
+
+        # Check if file exists to avoid unnecessary writes.
+        try:
+            obj = self._s3_client.get_object(
+                Bucket=bucket,
+                Key=key,
+            )
+            print(
+                 '[DEBUG] Not uploading file since one already exists for document with ID: {}'
+                .format(serial)
+            )
+        except self._s3_client.exceptions.NoSuchKey:
+            self._s3_client.upload_file(
+                file_path,
+                bucket,
+                key,
+                ExtraArgs={
+                    'ContentDisposition': 'inline',
+                    'ContentType': 'application/pdf'
+                },
+            )
+            print(
+                 '[DEBUG] Successfully uploaded document with ID: {}, link: {}'
+                .format(serial, link)
+            )
+
+        return link
+
     def populate_keywords(self):
         # TODO: populate description field.
         print('[INFO] Populating keywords.')
 
-        session = self._get_db_session()
+        session = self._session_maker()
 
         authority_categories = set()
         inquest_categories = set()
@@ -197,13 +316,15 @@ class Migrator:
             keyword_name = (rkeyword.split('-', 1)[1]) if '-' in rkeyword else rkeyword
 
             if rtype == self._AUTHORITY_TYPE_AUTHORITY:
+                self._authority_keyword_name_to_id[rkeyword] = keyword_id
                 model = AuthorityKeyword(
                     authorityKeywordId=keyword_id,
                     authorityCategoryId=category_id,
                     name=keyword_name,
                     description=None,
                 )
-            elif rtype == self._AUTHORITY_TYPE_INQUEST:
+            else:
+                self._inquest_keyword_name_to_id[rkeyword] = keyword_id
                 model = InquestKeyword(
                     inquestKeywordId=keyword_id,
                     inquestCategoryId=category_id,
@@ -214,14 +335,12 @@ class Migrator:
             session.add(model)
             session.flush()
 
-            self._mapping_keyword_id[rkeyword] = keyword_id
-
         session.commit()
 
     def populate_authorities_and_inquests(self):
         print('[INFO] Populating authorities and inquests.')
 
-        session = self._get_db_session()
+        session = self._session_maker()
 
         inquest_types = {
             'CONSTRUCTION',
@@ -229,6 +348,7 @@ class Migrator:
             'CUSTODY_POLICE',
             'DISCRETIONARY',
             'MINING',
+            'PSYCHIATRIC_RESTRAINT'
         }
         death_manners = {
             'ACCIDENT',
@@ -260,12 +380,9 @@ class Migrator:
                 session.add(authority)
                 session.flush()
                 authority_id = authority.authorityId
-                self._authority_related[authority_id] = (rcited, rrelated)
-                self._rel_authority_to_primary_document[rserial] = rprimarydoc
-            elif rtype == self._AUTHORITY_TYPE_INQUEST:
-                # Currently there are no inquests from outside of Canada.
-                jurisdiction = 'CAD_' + rjurisdiction
-
+                self._authority_serial_to_related[authority_id] = (rcited, rrelated)
+                self._authority_serial_to_primary_document[rserial] = rprimarydoc
+            else:
                 # Some inquests have their name prefixed with 'Inquest-'; this is redundant.
                 if rname.startswith('Inquest-'):
                     rname = rname.replace('Inquest-', '', 1)
@@ -279,7 +396,7 @@ class Migrator:
                     synopsis = match.group(1)
 
                 inquest = Inquest(
-                    jurisdictionId=jurisdiction,
+                    jurisdictionId=self._jurisdiction_serial_to_id[rjurisdiction],
                     isPrimary=rprimary,
                     name=self._format_string(rname),
                     overview=None,
@@ -305,7 +422,7 @@ class Migrator:
                 inquest_type_id = self._format_as_id(inquest_type)
                 if inquest_type_id not in inquest_types:
                     print(
-                        '[WARNING] Invalid inquest type: {} referenced by Inquest with ID: {}. Defaulting to "OTHER".'
+                        '[WARNING] Invalid inquest type: {} referenced by inquest with ID: {}. Defaulting to "OTHER".'
                         .format(inquest_type, rserial)
                     )
                     inquest_type_id = 'OTHER'
@@ -314,7 +431,7 @@ class Migrator:
                 death_manner_id = self._format_as_id(rdeathmanner)
                 if death_manner_id not in death_manners:
                     print(
-                        '[WARNING] Invalid manner of death {} referenced by Inquest with ID: {}. Defaulting to "OTHER".'
+                        '[WARNING] Invalid manner of death {} referenced by inquest with ID: {}. Defaulting to "OTHER".'
                         .format(rdeathmanner, rserial)
                     )
                     death_manner_id = 'OTHER'
@@ -341,71 +458,69 @@ class Migrator:
                 session.add(deceased)
                 session.flush()
 
-            self._authority_data[rserial] = (rtype, rkeywords)
-            self._mapping_authority_id[rserial] = authority_id
+            self._authority_serial_to_type[rserial] = rtype
+            self._authority_serial_to_name[rserial] = self._format_string(rname)
+            self._authority_serial_to_keywords[rserial] = rkeywords
+            self._authority_serial_to_id[rserial] = authority_id
 
         session.commit()
 
     def populate_authority_relationships(self):
         print('[INFO] Populating authority relationships.')
 
-        session = self._get_db_session()
+        session = self._session_maker()
 
-        for (authority_id, (cited, related)) in self._authority_related.items():
+        for (authority_id, (cited, related)) in self._authority_serial_to_related.items():
             # Map authority to its cited authorities and related authorities.
             if cited is not None:
-                for authority in cited.split('\n'):
-                    if authority == '':
+                for authority_serial in cited.split('\n'):
+                    if authority_serial == '':
                         continue
 
                     # Ignore references to authorities which do not exist.
-                    if authority not in self._authority_data:
+                    if authority_serial not in self._authority_serial_to_id:
                         print(
                              '[WARNING] Invalid authority {} cited by authority with ID: {}'
-                            .format(authority, authority_id)
+                            .format(authority_serial, authority_id)
                         )
                         continue
 
-                    authority_type, _ = self._authority_data[authority]
-
                     # Ignore references to inquests.
-                    if authority_type == self._AUTHORITY_TYPE_INQUEST:
+                    if self._authority_serial_to_type[authority_serial] == self._AUTHORITY_TYPE_INQUEST:
                         print(
                              '[WARNING] Inquest {} cited by authority with ID: {}'
-                            .format(authority, authority_id)
+                            .format(authority_serial, authority_id)
                         )
                         continue
 
                     session.add(AuthorityCitations(
                         authorityId=authority_id,
-                        citedAuthorityId=self._mapping_authority_id[authority],
+                        citedAuthorityId=self._authority_serial_to_id[authority_serial],
                     ))
                     session.flush()
 
             if related is not None:
-                for authority in related.split('\n'):
-                    if authority == '':
+                for authority_serial in related.split('\n'):
+                    if authority_serial == '':
                         continue
 
                     # Ignore references to authorities which do not exist.
-                    if authority not in self._authority_data:
+                    if authority_serial not in self._authority_serial_to_id:
                         print(
                              '[WARNING] Invalid authority {} related to authority with ID: {}'
-                            .format(authority, authority_id)
+                            .format(authority_serial, authority_id)
                         )
                         continue
 
-                    authority_type, _ = self._authority_data[authority]
-
-                    if authority_type == self._AUTHORITY_TYPE_INQUEST:
+                    if self._authority_serial_to_type[authority_serial] == self._AUTHORITY_TYPE_INQUEST:
                         session.add(AuthorityInquests(
                             authorityId=authority_id,
-                            inquestId=self._mapping_authority_id[authority],
+                            inquestId=self._authority_serial_to_id[authority_serial],
                         ))
                     else:
                         session.add(AuthorityRelated(
                             authorityId=authority_id,
-                            relatedAuthorityId=self._mapping_authority_id[authority],
+                            relatedAuthorityId=self._authority_serial_to_id[authority_serial],
                         ))
                     session.flush()
 
@@ -414,59 +529,42 @@ class Migrator:
     def populate_authority_and_inquest_keywords(self):
         print('[INFO] Populating authority and inquest keywords.')
 
-        session = self._get_db_session()
+        session = self._session_maker()
 
-        for serial, (authority_type, keywords) in self._authority_data.items():
+        for authority_serial, keywords in self._authority_serial_to_keywords.items():
             for keyword in keywords.split(','):
                 if keyword == '' or keyword == 'zz_NotYetClassified':
                     continue
 
-                # Ignore references to keywords which do not exist.
-                if keyword not in self._mapping_keyword_id:
-                    print(
-                         '[WARNING] Invalid keyword {} referenced by {} with ID: {}'
-                        .format(
-                            keyword,
-                            self._authority_type_to_string(rtype),
-                            serial)
-                    )
-                    continue
-
-                if authority_type == self._AUTHORITY_TYPE_AUTHORITY:
-                    model = AuthorityKeywords(
-                        authorityId=self._mapping_authority_id[serial],
-                        authorityKeywordId=self._mapping_keyword_id[keyword],
-                    )
-                elif authority_type == self._AUTHORITY_TYPE_INQUEST:
-                    model = InquestKeywords(
-                        inquestId=self._mapping_authority_id[serial],
-                        inquestKeywordId=self._mapping_keyword_id[keyword],
-                    )
-
-                # We must handle invalid FK constraints since they're not enforced in the current data structure
-                # (e.g., an authority referencing an inquest keyword).
-                try:
-                    session.add(model)
-                    session.flush()
-                except sqlalchemy.exc.IntegrityError as e:
-                    print(
-                         '[WARNING] Invalid keyword {} referenced by {} with ID: {}'
-                        .format(
-                            self._mapping_keyword_id[keyword],
-                            self._authority_type_to_string(authority_type),
-                            serial
+                if self._authority_serial_to_type[authority_serial] == self._AUTHORITY_TYPE_AUTHORITY:
+                    if keyword not in self._authority_keyword_name_to_id:
+                        print(
+                             '[WARNING] Invalid keyword {} referenced by authority with ID: {}'
+                            .format(keyword, authority_serial)
                         )
-                    )
-                    session.rollback()
-                    continue
+                        continue
+                    session.add(AuthorityKeywords(
+                        authorityId=self._authority_serial_to_id[authority_serial],
+                        authorityKeywordId=self._authority_keyword_name_to_id[keyword],
+                    ))
+                else:
+                    if keyword not in self._inquest_keyword_name_to_id:
+                        print(
+                             '[WARNING] Invalid keyword {} referenced by inquest with ID: {}'
+                            .format(keyword, authority_serial)
+                        )
+                        continue
+                    session.add(InquestKeywords(
+                        inquestId=self._authority_serial_to_id[authority_serial],
+                        inquestKeywordId=self._inquest_keyword_name_to_id[keyword],
+                    ))
 
-            # Commit for each authority since a rollback may occur at any time.
-            session.commit()
+        session.commit()
 
     def populate_documents(self):
         print('[INFO] Populating authority and inquest documents.')
 
-        session = self._get_db_session()
+        session = self._session_maker()
 
         document_sources = set()
 
@@ -478,6 +576,7 @@ class Migrator:
                 document_source = 'Inquests.ca'
             else:
                 document_source = rlinktype
+
             document_source_id = self._format_as_id(document_source)
             if document_source_id not in document_sources:
                 session.add(DocumentSource(
@@ -495,26 +594,42 @@ class Migrator:
                 )
 
             # Map authority or inquest to its documents.
-            for authority in rauthorities.split('\n'):
-                if authority == '':
+            for authority_serial in rauthorities.split('\n'):
+                if authority_serial == '':
                     continue
 
                 # Ignore references to authorities which do not exist.
-                if authority not in self._authority_data:
+                if authority_serial not in self._authority_serial_to_id:
                     print(
                          '[WARNING] Invalid authority {} referenced by document with ID: {}'
-                        .format(authority, rserial)
+                        .format(authority_serial, rserial)
                     )
                     continue
 
-                authority_type, _ = self._authority_data[authority]
+                # Upload document to S3 if respective file exists locally.
+                link = self._format_string(rlink)
+                if rlink is not None and rlink.strip() == self._404_LINK:
+                    print(
+                         '[DEBUG] 404 link, not uploading document with ID: {}'
+                        .format(rserial)
+                    )
+                    link = None
+                elif document_source == 'Inquests.ca':
+                    if not rlink.startswith('https://www.dropbox.com/'):
+                        print(
+                             '[WARNING] Document {} has source Inquests.ca and non-Dropbox link: {}'
+                            .format(rserial, rlink)
+                        )
+                    s3_link = self._upload_document_if_exists(rshortname, rdate, rsource, rserial, authority_serial)
+                    if s3_link is not None:
+                        link = s3_link
 
-                if authority_type == self._AUTHORITY_TYPE_AUTHORITY:
+                if self._authority_serial_to_type[authority_serial] == self._AUTHORITY_TYPE_AUTHORITY:
                     authority_document = AuthorityDocument(
-                        authorityId=self._mapping_authority_id[authority],
+                        authorityId=self._authority_serial_to_id[authority_serial],
                         authorityDocumentTypeId=None,
-                        sourceId=self._mapping_source_id[rsource],
-                        isPrimary=rcitation == self._rel_authority_to_primary_document[authority],
+                        sourceId=self._source_serial_to_id[rsource],
+                        isPrimary=rcitation == self._authority_serial_to_primary_document[authority_serial],
                         name=self._format_string(rshortname),
                         citation=self._format_string(rcitation),
                         created=self._format_date(rdate),
@@ -524,17 +639,18 @@ class Migrator:
                     session.add(AuthorityDocumentLinks(
                         authorityDocumentId=authority_document.authorityDocumentId,
                         documentSourceId=document_source_id,
-                        link=self._format_string(rlink),
+                        link=link,
                     ))
                     session.flush()
-                elif authority_type == self._AUTHORITY_TYPE_INQUEST:
+                else:
                     if rshortname.startswith('Inquest-'):
                         # Some inquest documents begin with 'Inquest-'; this is redundant.
                         document_name = rshortname.replace('Inquest-', '')
                     else:
                         document_name = rshortname
+
                     inquest_document = InquestDocument(
-                        inquestId=self._mapping_authority_id[authority],
+                        inquestId=self._authority_serial_to_id[authority_serial],
                         inquestDocumentTypeId=None,
                         name=self._format_string(document_name),
                         created=self._format_date(rdate),
@@ -544,7 +660,7 @@ class Migrator:
                     session.add(InquestDocumentLinks(
                         inquestDocumentId=inquest_document.inquestDocumentId,
                         documentSourceId=document_source_id,
-                        link=self._format_string(rlink),
+                        link=link,
                     ))
                     session.flush()
 
@@ -553,20 +669,16 @@ class Migrator:
     def validate(self):
         print('[INFO] Running SQL validation scripts.')
 
-        session = self._get_db_session()
+        session = self._session_maker()
 
         # Invert mapping of authority IDs to map new IDs to input IDs.
-        authority_serials = [
-            serial for (serial, (authority_type, _)) in self._authority_data.items()
-            if authority_type == self._AUTHORITY_TYPE_AUTHORITY
-        ]
-        inverse_mapping_authority_id = {
-            new_id: serial for serial, new_id in self._mapping_authority_id.items()
-            if serial in authority_serials
+        authority_id_to_serial = {
+            new_id: serial for serial, new_id in self._authority_serial_to_id.items()
+            if self._authority_serial_to_type[serial] == self._AUTHORITY_TYPE_AUTHORITY
         }
-        inverse_mapping_inquest_id = {
-            new_id: serial for serial, new_id in self._mapping_authority_id.items()
-            if serial not in authority_serials
+        inquest_id_to_serial = {
+            new_id: serial for serial, new_id in self._authority_serial_to_id.items()
+            if self._authority_serial_to_type[serial] == self._AUTHORITY_TYPE_INQUEST
         }
 
         # Ensure each authority has exactly one primary document.
@@ -585,7 +697,7 @@ class Migrator:
                 count = 0
             print(
                  '[WARNING] Authority {} has {} primary documents.'
-                .format(inverse_mapping_authority_id[authority_id], count)
+                .format(authority_id_to_serial[authority_id], count)
             )
 
         # Ensure each inquest has at least one document.
@@ -601,7 +713,7 @@ class Migrator:
             inquest_id = row[0]
             print(
                  '[WARNING] Inquest {} does not have any documents.'
-                .format(inverse_mapping_inquest_id[inquest_id], count)
+                .format(inquest_id_to_serial[inquest_id], count)
             )
 
         # Ensure each authority has at least one keyword.
@@ -617,7 +729,7 @@ class Migrator:
             authority_id = row[0]
             print(
                  '[WARNING] Authority {} does not have any keywords.'
-                .format(inverse_mapping_authority_id[authority_id], count)
+                .format(authority_id_to_serial[authority_id], count)
             )
 
         # Ensure each inquest has at least one keyword.
@@ -633,7 +745,7 @@ class Migrator:
             inquest_id = row[0]
             print(
                  '[WARNING] Inquest {} does not have any keywords.'
-                .format(inverse_mapping_inquest_id[inquest_id], count)
+                .format(inquest_id_to_serial[inquest_id], count)
             )
 
         # Ensure each inquest has at least one CAUSE keyword.
@@ -650,11 +762,13 @@ class Migrator:
             inquest_id = row[0]
             print(
                  '[WARNING] Inquest {} does not have any CAUSE keywords.'
-                .format(inverse_mapping_inquest_id[inquest_id], count)
+                .format(inquest_id_to_serial[inquest_id], count)
             )
 
 
 if __name__ == '__main__':
-    data_path = sys.argv[1]
-    db_url = sys.argv[2]
-    Migrator(data_path, db_url)
+    data_file_path = sys.argv[1]
+    document_files_directory = sys.argv[2]
+    db_url = sys.argv[3]
+    upload_documents = sys.argv[4].lower() == 'true'
+    Migrator(data_file_path, document_files_directory, db_url, upload_documents)
