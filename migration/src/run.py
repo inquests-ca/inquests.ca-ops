@@ -631,11 +631,12 @@ class Migrator:
                     )
                     session.add(authority_document)
                     session.flush()
-                    session.add(AuthorityDocumentLinks(
-                        authorityDocumentId=authority_document.authorityDocumentId,
-                        documentSourceId=document_source_id,
-                        link=link,
-                    ))
+                    if link is not None:
+                        session.add(AuthorityDocumentLinks(
+                            authorityDocumentId=authority_document.authorityDocumentId,
+                            documentSourceId=document_source_id,
+                            link=link,
+                        ))
                 else:
                     if rshortname.startswith('Inquest-'):
                         # Some inquest documents begin with 'Inquest-'; this is redundant.
@@ -651,11 +652,12 @@ class Migrator:
                     )
                     session.add(inquest_document)
                     session.flush()
-                    session.add(InquestDocumentLinks(
-                        inquestDocumentId=inquest_document.inquestDocumentId,
-                        documentSourceId=document_source_id,
-                        link=link,
-                    ))
+                    if link is not None:
+                        session.add(InquestDocumentLinks(
+                            inquestDocumentId=inquest_document.inquestDocumentId,
+                            documentSourceId=document_source_id,
+                            link=link,
+                        ))
 
         session.commit()
 
