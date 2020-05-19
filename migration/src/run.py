@@ -68,10 +68,10 @@ class Migrator:
         config = botocore.client.Config(signature_version=botocore.UNSIGNED)
         return session.client('s3'), session.client('s3', config=config)
 
-    def _read_worksheet(self, sheet):
+    def _read_workbook(self, workbook):
         """Returns iterator for rows in given Excel file."""
-        wb = load_workbook(self._data_file_path)
-        ws = wb[sheet]
+        wb = load_workbook(os.path.join(self._data_file_path, 'caspio_{}.xlsx'.format(workbook)))
+        ws = wb.active
 
         # Start at 2nd row to ignore headers.
         return ws.iter_rows(min_row=2, values_only=True)
@@ -188,6 +188,7 @@ class Migrator:
             'ONSCJ': 'CAD_ONSCJ',
             'SCC': 'CAD_SCC',
             'SKLEG': 'CAD_SKLEG',
+            'SKPI': 'CAD_SKPI',
             'SKQB': 'CAD_SKQB',
             'YKCA': 'CAD_YKCA',
             'UKSenC': 'UK_SENC',
@@ -275,7 +276,7 @@ class Migrator:
         authority_categories = set()
         inquest_categories = set()
 
-        for row in self._read_worksheet('Keywords'):
+        for row in self._read_workbook('keywords'):
             rtype, rkeyword, rserial = row
 
             if not self._is_valid_authority_type(rtype):
@@ -356,7 +357,7 @@ class Migrator:
             'UNDETERMINED',
         }
 
-        for row in self._read_worksheet('Authorities'):
+        for row in self._read_workbook('authorities'):
             (rserial, rname, _, rtype, rsynopsis, rkeywords, _, rquotes, rnotes, rprimary, _, _,
                 roverview, _, _, rjurisdiction, _, _, rprimarydoc, _, rcited, rrelated, _, _, _,
                 rlastname, rgivennames, rdeathdate, rcause, rinqtype, rpresidingofficer, rsex, rage,
@@ -563,7 +564,7 @@ class Migrator:
 
         document_sources = set()
 
-        for row in self._read_worksheet('Documents'):
+        for row in self._read_workbook('docs'):
             rauthorities, rserial, rshortname, rcitation, rdate, rlink, rlinktype, rsource = row
 
             # Create document source type (i.e., the location where the document is stored) if it does not exist.
