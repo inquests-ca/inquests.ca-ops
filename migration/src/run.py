@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 import re
 import datetime
 from collections import defaultdict
@@ -21,8 +22,8 @@ class Migrator:
 
     _404_LINK = 'https://www.dropbox.com/s/zs9toyx40takmi6/UrlPendingError.pdf?dl=0'
 
-    def __init__(self, data_file_path, document_files_directory, db_url, upload_documents):
-        self._data_file_path = data_file_path
+    def __init__(self, data_directory, document_files_directory, db_url, upload_documents):
+        self._data_directory = data_directory
         self._document_files_directory = document_files_directory
         self._session_maker = self._init_session_maker(db_url)
         self._upload_documents = upload_documents
@@ -70,7 +71,7 @@ class Migrator:
 
     def _read_workbook(self, workbook):
         """Returns iterator for rows in given Excel file."""
-        wb = load_workbook(os.path.join(self._data_file_path, 'caspio_{}.xlsx'.format(workbook)))
+        wb = load_workbook(os.path.join(self._data_directory, 'caspio_{}.xlsx'.format(workbook)))
         ws = wb.active
 
         # Start at 2nd row to ignore headers.
@@ -192,6 +193,7 @@ class Migrator:
             'SKQB': 'CAD_SKQB',
             'YKCA': 'CAD_YKCA',
             'UKSenC': 'UK_SENC',
+            'UKSC': 'UK_SC',
             'USSC': 'US_SC',
             'REF': 'REF',
         }
@@ -268,7 +270,6 @@ class Migrator:
         return link
 
     def populate_keywords(self):
-        # TODO: populate description field.
         print('[INFO] Populating keywords.')
 
         session = self._session_maker()
@@ -277,7 +278,7 @@ class Migrator:
         inquest_categories = set()
 
         for row in self._read_workbook('keywords'):
-            rtype, rkeyword, rserial = row
+            rtype, rkeyword, rserial, rdescription = row
 
             if not self._is_valid_authority_type(rtype):
                 print('[WARNING] Unknown authority type: {}'.format(rtype))
@@ -299,14 +300,14 @@ class Migrator:
                 session.add(AuthorityCategory(
                     authorityCategoryId=category_id,
                     name=self._format_string(category.title()),
-                    description=None
+                    description=rdescription
                 ))
                 authority_categories.add(category_id)
             elif rtype == self._AUTHORITY_TYPE_INQUEST and category_id not in inquest_categories:
                 session.add(InquestCategory(
                     inquestCategoryId=category_id,
                     name=self._format_string(category.title()),
-                    description=None
+                    description=rdescription
                 ))
                 inquest_categories.add(category_id)
             session.flush()
@@ -763,8 +764,13 @@ class Migrator:
 
 
 if __name__ == '__main__':
-    data_file_path = sys.argv[1]
-    document_files_directory = sys.argv[2]
-    db_url = sys.argv[3]
-    upload_documents = sys.argv[4].lower() == 'true'
-    Migrator(data_file_path, document_files_directory, db_url, upload_documents)
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--data', help='Directory containing data to be processed')
+    parser.add_argument('--documents', help='Directory containing documents')
+    parser.add_argument('--db', help='Database URL')
+    parser.add_argument('--upload', action='store_true', help='Whether to upload documents to AWS S3')
+
+    args = parser.parse_args()
+
+    Migrator(args.data, args.documents, args.db, args.upload)
