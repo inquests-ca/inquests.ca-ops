@@ -20,8 +20,6 @@ class Migrator:
     _AUTHORITY_TYPE_AUTHORITY = 'Authority'
     _AUTHORITY_TYPE_INQUEST = 'Inquest/Fatality Inquiry'
 
-    _404_LINK = 'https://www.dropbox.com/s/zs9toyx40takmi6/UrlPendingError.pdf?dl=0'
-
     def __init__(self, data_directory, document_files_directory, db_url, upload_documents):
         self._data_directory = data_directory
         self._document_files_directory = document_files_directory
@@ -30,8 +28,6 @@ class Migrator:
         self._s3_client, self._s3_client_url_generator = self._init_s3_clients()
 
         # Mappings from input data attributes to new IDs.
-        self._source_serial_to_id = self._get_source_mappings()
-        self._jurisdiction_serial_to_id = self._get_jurisdiction_mappings()
         self._authority_keyword_name_to_id = {}
         self._inquest_keyword_name_to_id = {}
         self._authority_serial_to_id = {}
@@ -124,7 +120,7 @@ class Migrator:
                 (month, day, year) = match.groups()
                 return "{}-{}-{}".format(year, month, day)
             else:
-                raise ValueError("Invalid date: {}".format(date))
+                raise ValueError('Invalid date: {}'.format(date))
 
     def _get_year_from_date(self, date):
         """Get year from date; note that date may be one of many types or formats."""
@@ -137,69 +133,51 @@ class Migrator:
         elif re.match(r'\d{1,2}/\d{1,2}/\d{4}', date) is not None:
             return date[-4:]
         else:
-            raise ValueError("Invalid date: {}".format(date))
+            raise ValueError('Invalid date: {}'.format(date))
 
     def _format_s3_key_segment(self, string):
         """Replaces certain characters in the given string to avoid the need for URL encoding."""
+        if string is None:
+            return 'MissingData'
         return re.sub(r'[^a-zA-Z0-9]+', '-', string).strip('-')
 
-    def _get_jurisdiction_mappings(self):
-        return {
-            'CAN': 'CAD',
-            'AB': 'CAD_AB',
-            'BC': 'CAD_BC',
-            'MB': 'CAD_MB',
-            'NB': 'CAD_NB',
-            'NL': 'CAD_NL',
-            'NS': 'CAD_NS',
-            'NT': 'CAD_NT',
-            'NU': 'CAD_NU',
-            'ON': 'CAD_ON',
-            'PE': 'CAD_PE',
-            'QC': 'CAD_QC',
-            'SK': 'CAD_SK',
-            'YK': 'CAD_YK',
+    def _jurisdiction_serial_to_id(self, serial):
+        serial_to_id = {
+            'CAN': 'CAN',
             'UK': 'UK',
             'US': 'US',
         }
 
-    def _get_source_mappings(self):
-        return {
-            'ABCA': 'CAD_ABCA',
-            'ABCQB': 'CAD_ABCQB',
-            'ABINQ': 'CAD_ABINQ',
-            'ABLEG': 'CAD_ABLEG',
-            'BCCA': 'CAD_BCCA',
-            'BCINQ': 'CAD_BCINQ',
-            'BCLEG': 'CAD_BCLEG',
-            'BCSC': 'CAD_BCSC',
-            'FCC': 'CAD_FCC',
-            'CANLEG': 'CAD_LEG',
-            'MBCA': 'CAD_MBCA',
-            'MBCQB': 'CAD_MBCQB',
-            'NSCA': 'CAD_NSCA',
-            'NUINQ': 'CAD_NUINQ',
-            'ONCA': 'CAD_ONCA',
-            'ONINQ': 'CAD_ONINQ',
-            'ONJI': 'CAD_ONJI',
-            'ONLEG': 'CAD_ONLEG',
-            'ONOCC': 'CAD_ONOCC',
-            'ONOLRC': 'CAD_ONOLRC',
-            'ONPI': 'CAD_ONPI',
-            'ONSCJ': 'CAD_ONSCJ',
-            'SCC': 'CAD_SCC',
-            'SKLEG': 'CAD_SKLEG',
-            'SKPI': 'CAD_SKPI',
-            'SKQB': 'CAD_SKQB',
-            'YKCA': 'CAD_YKCA',
+        if serial in serial_to_id:
+            return serial_to_id[serial]
+        else:
+            # In the default case, prepend CAN_ to serial to get ID.
+            return 'CAN_{}'.format(serial)
+
+    def _source_serial_to_id(self, serial):
+        serial_to_id = {
+            'CANLEG': 'CAN_LEG',
             'UKSenC': 'UK_SENC',
             'UKSC': 'UK_SC',
             'USSC': 'US_SC',
             'REF': 'REF',
         }
 
+        if serial in serial_to_id:
+            return serial_to_id[serial]
+        else:
+            # In the default case, prepend CAN_ to serial to get ID.
+            return 'CAN_{}'.format(serial)
+
     def _upload_document_if_exists(self, name, date, source, serial, authority_serial):
         """Upload document file to S3 if one exists locally."""
+        if serial is None:
+            print(
+                 '[WARNING] No serial for document: {}'
+                .format(name)
+            )
+            return None
+
         # Get file path.
         directory = os.path.join(self._document_files_directory, serial.strip())
         documents = list(os.scandir(directory)) if os.path.isdir(directory) else []
@@ -217,11 +195,12 @@ class Migrator:
         year = self._get_year_from_date(date)
 
         # Generate S3 key for the given document with the form:
-        # <source>/<year>/<authority name>/<document name>
+        # Documents/<source>/<year>/<authority name>/<document name>
         authority_name = self._authority_serial_to_name[authority_serial]
         key = '/'.join([
+            'Documents',
             self._format_s3_key_segment(source),
-            self._format_s3_key_segment(year) if year is not None else 'UnknownDate',
+            self._format_s3_key_segment(year),
             self._format_s3_key_segment(authority_name),
             self._format_s3_key_segment(name),
         ]) + '.pdf'
@@ -396,7 +375,7 @@ class Migrator:
                     synopsis = match.group(1)
 
                 inquest = Inquest(
-                    jurisdictionId=self._jurisdiction_serial_to_id[rjurisdiction],
+                    jurisdictionId=self._jurisdiction_serial_to_id(rjurisdiction),
                     isPrimary=rprimary,
                     name=self._format_string(rname),
                     overview=None,
@@ -568,20 +547,16 @@ class Migrator:
         for row in self._read_workbook('docs'):
             rauthorities, rserial, rshortname, rcitation, rdate, rlink, rlinktype, rsource = row
 
-            # Create document source type (i.e., the location where the document is stored) if it does not exist.
-            if 'inquests.ca' in rlinktype.lower():
-                document_source = 'Inquests.ca'
-            else:
-                document_source = rlinktype
-
-            document_source_id = self._format_as_id(document_source)
-            if document_source_id not in document_sources:
-                session.add(DocumentSource(
-                    documentSourceId=document_source_id,
-                    name=self._format_string(document_source),
-                ))
-                session.flush()
-                document_sources.add(document_source_id)
+            if rlinktype != 'No Publish':
+                # Create document source type (i.e., the location where the document is stored) if it does not exist.
+                document_source_id = self._format_as_id(rlinktype)
+                if document_source_id not in document_sources:
+                    session.add(DocumentSource(
+                        documentSourceId=document_source_id,
+                        name=self._format_string(rlinktype),
+                    ))
+                    session.flush()
+                    document_sources.add(document_source_id)
 
             # Ensure document references at least one authority.
             if not any(rauthorities.split('\n')):
@@ -604,28 +579,36 @@ class Migrator:
                     continue
 
                 # Upload document to S3 if respective file exists locally.
-                link = self._format_string(rlink)
-                if rlink.strip() == self._404_LINK:
-                    print(
-                         '[DEBUG] 404 link, not uploading document with ID: {}'
-                        .format(rserial)
-                    )
-                    link = None
-                elif document_source == 'Inquests.ca':
-                    if not rlink.startswith('https://www.dropbox.com/'):
+                link = None
+                if rlinktype == 'Inquests.ca':
+                    if rlink is not None and len(rlink) != 0:
                         print(
-                             '[WARNING] Document {} has source Inquests.ca and non-Dropbox link: {}'
+                             '[WARNING] Document {} has source Inquests.ca and non-null link: {}'
                             .format(rserial, rlink)
                         )
                     s3_link = self._upload_document_if_exists(rshortname, rdate, rsource, rserial, authority_serial)
                     if s3_link is not None:
                         link = s3_link
+                elif rlinktype == 'No Publish':
+                    if rlink is not None and len(rlink) != 0:
+                        print(
+                             '[WARNING] Document {} has flag No Publish and non-null link: {}'
+                            .format(rserial, rlink)
+                        )
+                else:
+                    if rlink is not None and len(rlink) != 0:
+                        link = rlink
+                    else:
+                        print(
+                             '[WARNING] Document {} has null link.'
+                            .format(rserial)
+                        )
 
                 if self._authority_serial_to_type[authority_serial] == self._AUTHORITY_TYPE_AUTHORITY:
                     authority_document = AuthorityDocument(
                         authorityId=self._authority_serial_to_id[authority_serial],
                         authorityDocumentTypeId=None,
-                        sourceId=self._source_serial_to_id[rsource],
+                        sourceId=self._source_serial_to_id(rsource),
                         isPrimary=rcitation == self._authority_serial_to_primary_document[authority_serial],
                         name=self._format_string(rshortname),
                         citation=self._format_string(rcitation),
