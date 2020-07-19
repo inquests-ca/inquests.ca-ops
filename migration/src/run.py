@@ -21,6 +21,7 @@ class Migrator:
     _AUTHORITY_TYPE_INQUEST = 'Inquest/Fatality Inquiry'
 
     def __init__(self, data_directory, document_files_directory, db_url, upload_documents):
+        # TODO: run inquestsca.sql on startup.
         self._data_directory = data_directory
         self._document_files_directory = document_files_directory
         self._session_maker = self._init_session_maker(db_url)
@@ -193,13 +194,14 @@ class Migrator:
         file_path = documents[0].path
 
         year = self._get_year_from_date(date)
+        source_id = self._source_serial_to_id(serial)
 
         # Generate S3 key for the given document with the form:
         # Documents/<source>/<year>/<authority name>/<document name>
         authority_name = self._authority_serial_to_name[authority_serial]
         key = '/'.join([
             'Documents',
-            self._format_s3_key_segment(source),
+            self._format_s3_key_segment(source_id),
             self._format_s3_key_segment(year),
             self._format_s3_key_segment(authority_name),
             self._format_s3_key_segment(name),
