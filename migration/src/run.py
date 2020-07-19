@@ -597,6 +597,11 @@ class Migrator:
                              '[WARNING] Document {} has flag No Publish and non-null link: {}'
                             .format(rserial, rlink)
                         )
+                    else:
+                        print(
+                             '[DEBUG] Not uploading document with No Publish flag: {}'
+                            .format(rserial)
+                        )
                 else:
                     if rlink is not None and len(rlink) != 0:
                         link = rlink
