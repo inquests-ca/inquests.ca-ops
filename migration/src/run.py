@@ -143,23 +143,20 @@ class Migrator:
         return re.sub(r'[^a-zA-Z0-9]+', '-', string).strip('-')
 
     def _jurisdiction_serial_to_id(self, serial):
-        serial_to_id = {
-            'CAN': 'CAN',
-            'UK': 'UK',
-            'US': 'US',
-        }
-
-        if serial in serial_to_id:
-            return serial_to_id[serial]
+        if serial in ['CAN', 'UK', 'US']:
+            return serial
         else:
-            # In the default case, prepend CAN_ to serial to get ID.
+            # Otherwise jurisdiction is Canadian province or territory, so prepend CAN_ to get ID.
             return 'CAN_{}'.format(serial)
 
     def _source_serial_to_id(self, serial):
         serial_to_id = {
             'CANLEG': 'CAN_LEG',
+            'CANPI': 'CAN_PI',
+            'UKLEG': 'UK_LEG',
             'UKSenC': 'UK_SENC',
             'UKSC': 'UK_SC',
+            'USOTH': 'US_REF',
             'USSC': 'US_SC',
             'REF': 'REF',
         }
@@ -194,7 +191,7 @@ class Migrator:
         file_path = documents[0].path
 
         year = self._get_year_from_date(date)
-        source_id = self._source_serial_to_id(serial)
+        source_id = self._source_serial_to_id(source)
 
         # Generate S3 key for the given document with the form:
         # Documents/<source>/<year>/<authority name>/<document name>
@@ -343,7 +340,7 @@ class Migrator:
             (rserial, rname, _, rtype, rsynopsis, rkeywords, _, rquotes, rnotes, rprimary, _, _,
                 roverview, _, _, rjurisdiction, _, _, rprimarydoc, _, rcited, rrelated, _, _, _,
                 rlastname, rgivennames, rdeathdate, rcause, rinqtype, rpresidingofficer, rsex, rage,
-                rstart, rend, _, _, _, _, _, rdeathmanner) = row
+                rstart, rend, _, _, _, _, _, rdeathmanner, _) = row
 
             if not self._is_valid_authority_type(rtype):
                 print('[WARNING] Unknown authority type: {}'.format(rtype))
