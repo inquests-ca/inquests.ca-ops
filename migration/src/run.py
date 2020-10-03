@@ -77,6 +77,7 @@ class Migrator:
     def _is_valid_authority_type(self, authority_type):
         return authority_type in [self._AUTHORITY_TYPE_AUTHORITY, self._AUTHORITY_TYPE_INQUEST]
 
+    # TODO: move to new file
     def _format_as_id(self, name):
         """Formats string to an appropriate ID."""
         return (
@@ -167,6 +168,7 @@ class Migrator:
             # In the default case, prepend CAN_ to serial to get ID.
             return 'CAN_{}'.format(serial)
 
+    # TODO: move to new file.
     def _upload_document_if_exists(self, name, date, source, serial, authority_serial):
         """Upload document file to S3 if one exists locally."""
         if serial is None:
@@ -222,7 +224,7 @@ class Migrator:
 
         # Check if file exists to avoid unnecessary writes.
         try:
-            obj = self._s3_client.get_object(
+            self._s3_client.get_object(
                 Bucket=bucket,
                 Key=key,
             )
@@ -256,7 +258,7 @@ class Migrator:
         inquest_categories = set()
 
         for row in self._read_workbook('keywords'):
-            rtype, rkeyword, rserial, rdescription = row
+            rtype, rkeyword, _, rdescription = row
 
             if not self._is_valid_authority_type(rtype):
                 print('[WARNING] Unknown authority type: {}'.format(rtype))
