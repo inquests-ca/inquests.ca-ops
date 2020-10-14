@@ -1,18 +1,14 @@
-import os
-import sys
 import argparse
+import os
 import re
-import datetime
-from collections import defaultdict
 
-import boto3
-import botocore
 import sqlalchemy
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 from openpyxl import load_workbook
 
-from models import *
+import models
+import utils
+from db import DatabaseClient
+from s3 import S3Client
 
 
 class Migrator:
@@ -21,12 +17,11 @@ class Migrator:
     _AUTHORITY_TYPE_INQUEST = 'Inquest/Fatality Inquiry'
 
     def __init__(self, data_directory, document_files_directory, db_url, upload_documents):
-        # TODO: run inquestsca.sql on startup.
         self._data_directory = data_directory
         self._document_files_directory = document_files_directory
-        self._session_maker = self._init_session_maker(db_url)
         self._upload_documents = upload_documents
-        self._s3_client, self._s3_client_url_generator = self._init_s3_clients()
+        self._db_client = DatabaseClient(db_url)
+        self._s3_client = S3Client(bucket='inquests-ca-resources')
 
         # Mappings from input data attributes to new IDs.
         self._authority_keyword_name_to_id = {}
@@ -54,94 +49,16 @@ class Migrator:
         # Run checks to ensure data is valid.
         self.validate()
 
-    def _init_session_maker(self, db_url):
-        """Create session maker which will be used to initiate database connections."""
-        engine = create_engine(db_url)
-        Session = sessionmaker(bind=engine)
-        return Session
-
-    def _init_s3_clients(self):
-        """Create S3 client used to interface the inquests-ca-resources S3 bucket."""
-        session = boto3.Session(profile_name='migration')
-        config = botocore.client.Config(signature_version=botocore.UNSIGNED)
-        return session.client('s3'), session.client('s3', config=config)
-
     def _read_workbook(self, workbook):
         """Returns iterator for rows in given Excel file."""
-        wb = load_workbook(os.path.join(self._data_directory, 'caspio_{}.xlsx'.format(workbook)))
-        ws = wb.active
+        work_book = load_workbook(os.path.join(self._data_directory, 'caspio_{}.xlsx'.format(workbook)))
+        work_sheet = work_book.active
 
         # Start at 2nd row to ignore headers.
-        return ws.iter_rows(min_row=2, values_only=True)
+        return work_sheet.iter_rows(min_row=2, values_only=True)
 
     def _is_valid_authority_type(self, authority_type):
         return authority_type in [self._AUTHORITY_TYPE_AUTHORITY, self._AUTHORITY_TYPE_INQUEST]
-
-    # TODO: move to new file
-    def _format_as_id(self, name):
-        """Formats string to an appropriate ID."""
-        return (
-            name
-                .upper()
-                .replace('-', '_')
-                .replace(' ', '_')
-                .replace('.', '_')
-                .replace('/', '_')
-        )
-
-    def _nullable_to_string(self, string):
-        """Done to satisfy NULL constraints."""
-        if string is None:
-            return ''
-        return self._format_string(string)
-
-    def _string_to_nullable(self, string):
-        """If string is empty, return None"""
-        if string is None or string.strip() == '':
-            return None
-        return self._format_string(string)
-
-    def _format_string(self, string):
-        """Format string before inserting into database. Currently only trims whitespace."""
-        if string is None:
-            return None
-        return string.strip()
-
-    def _format_date(self, date):
-        """Format date string into SQL-compatible date."""
-        if type(date) == datetime.datetime:
-            return date
-        elif date is None or date == '':
-            return None
-        elif re.match(r'\d{4}-\d{2}-\d{2}', date) is not None:
-            # Date is already in valid format.
-            return date
-        else:
-            match = re.match(r'(\d{1,2})/(\d{1,2})/(\d{4})', date)
-            if match is not None and len(match.groups()) == 3:
-                (month, day, year) = match.groups()
-                return "{}-{}-{}".format(year, month, day)
-            else:
-                raise ValueError('Invalid date: {}'.format(date))
-
-    def _get_year_from_date(self, date):
-        """Get year from date; note that date may be one of many types or formats."""
-        if type(date) == datetime.datetime:
-            return str(date.year)
-        elif date is None or date == '':
-            return None
-        elif re.match(r'\d{4}-\d{2}-\d{2}', date) is not None:
-            return date[:4]
-        elif re.match(r'\d{1,2}/\d{1,2}/\d{4}', date) is not None:
-            return date[-4:]
-        else:
-            raise ValueError('Invalid date: {}'.format(date))
-
-    def _format_s3_key_segment(self, string):
-        """Replaces certain characters in the given string to avoid the need for URL encoding."""
-        if string is None:
-            return 'MissingData'
-        return re.sub(r'[^a-zA-Z0-9]+', '-', string).strip('-')
 
     def _jurisdiction_serial_to_id(self, serial):
         if serial in ['CAN', 'UK', 'US']:
@@ -168,7 +85,6 @@ class Migrator:
             # In the default case, prepend CAN_ to serial to get ID.
             return 'CAN_{}'.format(serial)
 
-    # TODO: move to new file.
     def _upload_document_if_exists(self, name, date, source, serial, authority_serial):
         """Upload document file to S3 if one exists locally."""
         if serial is None:
@@ -192,56 +108,30 @@ class Migrator:
 
         file_path = documents[0].path
 
-        year = self._get_year_from_date(date)
+        year = utils.get_year_from_date(date)
         source_id = self._source_serial_to_id(source)
 
         # Generate S3 key for the given document with the form:
         # Documents/<source>/<year>/<authority name>/<document name>
         authority_name = self._authority_serial_to_name[authority_serial]
-        key = '/'.join([
-            'Documents',
-            self._format_s3_key_segment(source_id),
-            self._format_s3_key_segment(year),
-            self._format_s3_key_segment(authority_name),
-            self._format_s3_key_segment(name),
-        ]) + '.pdf'
-
-        bucket = 'inquests-ca-resources'
-
-        # Currently no other way to get the object link with the Boto client.
-        # See https://stackoverflow.com/a/48197877
-        link = self._s3_client_url_generator.generate_presigned_url(
-            'get_object',
-            ExpiresIn=0,
-            Params={
-                'Bucket': bucket,
-                'Key': key
-            }
+        key = self._s3_client.generate_s3_key(
+            ['Documents', source_id, year, authority_name, name],
+            'pdf'
         )
+
+        link = self._s3_client.generate_object_url(key)
 
         if not self._upload_documents:
             return link
 
         # Check if file exists to avoid unnecessary writes.
-        try:
-            self._s3_client.get_object(
-                Bucket=bucket,
-                Key=key,
-            )
+        if self._s3_client.object_exists(key):
             print(
                  '[DEBUG] Not uploading file since one already exists for document with ID: {}'
                 .format(serial)
             )
-        except self._s3_client.exceptions.NoSuchKey:
-            self._s3_client.upload_file(
-                file_path,
-                bucket,
-                key,
-                ExtraArgs={
-                    'ContentDisposition': 'inline',
-                    'ContentType': 'application/pdf'
-                },
-            )
+        else:
+            self._s3_client.upload_pdf(file_path, key)
             print(
                  '[DEBUG] Successfully uploaded document with ID: {}, link: {}'
                 .format(serial, link)
@@ -252,7 +142,7 @@ class Migrator:
     def populate_keywords(self):
         print('[INFO] Populating keywords.')
 
-        session = self._session_maker()
+        session = self._db_client.get_session()
 
         authority_categories = set()
         inquest_categories = set()
@@ -275,31 +165,31 @@ class Migrator:
                 category = 'General'
 
             # Create category if it does not exist.
-            category_id = self._format_as_id(category)
+            category_id = utils.format_as_id(category)
             if rtype == self._AUTHORITY_TYPE_AUTHORITY and category_id not in authority_categories:
-                session.add(AuthorityCategory(
+                session.add(models.AuthorityCategory(
                     authorityCategoryId=category_id,
-                    name=self._format_string(category.title()),
+                    name=utils.format_string(category.title()),
                     description=rdescription
                 ))
                 authority_categories.add(category_id)
             elif rtype == self._AUTHORITY_TYPE_INQUEST and category_id not in inquest_categories:
-                session.add(InquestCategory(
+                session.add(models.InquestCategory(
                     inquestCategoryId=category_id,
-                    name=self._format_string(category.title()),
+                    name=utils.format_string(category.title()),
                     description=rdescription
                 ))
                 inquest_categories.add(category_id)
             session.flush()
 
             # Get keyword ID from keyword name (e.g., Cause-Fall from height -> CAUSE_FALL_FROM_HEIGHT).
-            keyword_id = self._format_as_id(rkeyword)
+            keyword_id = utils.format_as_id(rkeyword)
             # Name keyword without category (e.g., Cause-Fall from height -> Fall from height)
             keyword_name = (rkeyword.split('-', 1)[1]) if '-' in rkeyword else rkeyword
 
             if rtype == self._AUTHORITY_TYPE_AUTHORITY:
                 self._authority_keyword_name_to_id[rkeyword] = keyword_id
-                model = AuthorityKeyword(
+                model = models.AuthorityKeyword(
                     authorityKeywordId=keyword_id,
                     authorityCategoryId=category_id,
                     name=keyword_name,
@@ -307,7 +197,7 @@ class Migrator:
                 )
             else:
                 self._inquest_keyword_name_to_id[rkeyword] = keyword_id
-                model = InquestKeyword(
+                model = models.InquestKeyword(
                     inquestKeywordId=keyword_id,
                     inquestCategoryId=category_id,
                     name=keyword_name,
@@ -320,7 +210,7 @@ class Migrator:
     def populate_authorities_and_inquests(self):
         print('[INFO] Populating authorities and inquests.')
 
-        session = self._session_maker()
+        session = self._db_client.get_session()
 
         # Separate authorities by type and sort by export ID
         rauthorities = []
@@ -370,22 +260,23 @@ class Migrator:
             self, session, rserial, rname, rsynopsis, rkeywords, rquotes, rnotes, rprimary,
             roverview, rprimarydoc, rcited, rrelated, rexport
         ):
-        authority = Authority(
+        authority = models.Authority(
             isPrimary=rprimary,
-            name=self._format_string(rname),
-            overview=self._nullable_to_string(roverview),
-            synopsis=self._nullable_to_string(rsynopsis),
-            quotes=self._string_to_nullable(rquotes),
-            notes=self._string_to_nullable(rnotes)
+            name=utils.format_string(rname),
+            overview=utils.nullable_to_string(roverview),
+            synopsis=utils.nullable_to_string(rsynopsis),
+            quotes=utils.string_to_nullable(rquotes),
+            notes=utils.string_to_nullable(rnotes)
         )
         session.add(authority)
         session.flush()
         authority_id = authority.authorityId
-        assert authority_id == rexport, "Autogenerated authority ID should match export ID for authority with ID: {}".format(rserial)
+        assert authority_id == rexport,\
+            "Autogenerated authority ID should match export ID for authority with ID: {}".format(rserial)
         self._authority_serial_to_related[authority_id] = (rcited, rrelated)
         self._authority_serial_to_primary_document[rserial] = rprimarydoc
         self._authority_serial_to_type[rserial] = self._AUTHORITY_TYPE_AUTHORITY
-        self._authority_serial_to_name[rserial] = self._format_string(rname)
+        self._authority_serial_to_name[rserial] = utils.format_string(rname)
         self._authority_serial_to_keywords[rserial] = rkeywords
         self._authority_serial_to_id[rserial] = authority_id
 
@@ -422,23 +313,24 @@ class Migrator:
         else:
             synopsis = match.group(1)
 
-        inquest = Inquest(
+        inquest = models.Inquest(
             jurisdictionId=self._jurisdiction_serial_to_id(rjurisdiction),
             isPrimary=rprimary,
-            name=self._format_string(rname),
+            name=utils.format_string(rname),
             overview=None,
-            synopsis=self._format_string(synopsis),
-            notes=self._string_to_nullable(rnotes),
-            presidingOfficer=self._nullable_to_string(rpresidingofficer),
-            start=self._format_date(rstart),
-            end=self._format_date(rend),
+            synopsis=utils.format_string(synopsis),
+            notes=utils.string_to_nullable(rnotes),
+            presidingOfficer=utils.nullable_to_string(rpresidingofficer),
+            start=utils.format_date(rstart),
+            end=utils.format_date(rend),
             sittingDays=None,
             exhibits=None,
         )
         session.add(inquest)
         session.flush()
         inquest_id = inquest.inquestId
-        assert inquest_id == rexport, "Autogenerated inquest ID should match export ID for inquest with ID: {}".format(rserial)
+        assert inquest_id == rexport,\
+            "Autogenerated inquest ID should match export ID for inquest with ID: {}".format(rserial)
 
         # Validate inquest type.
         if rinqtype.startswith('Mandatory-'):
@@ -447,7 +339,7 @@ class Migrator:
         else:
             inquest_type = rinqtype
 
-        inquest_type_id = self._format_as_id(inquest_type)
+        inquest_type_id = utils.format_as_id(inquest_type)
         if inquest_type_id not in inquest_types:
             print(
                 '[WARNING] Invalid inquest type: {} referenced by inquest with ID: {}. Defaulting to "OTHER".'
@@ -456,7 +348,7 @@ class Migrator:
             inquest_type_id = 'OTHER'
 
         # Validate manner of death.
-        death_manner_id = self._format_as_id(rdeathmanner)
+        death_manner_id = utils.format_as_id(rdeathmanner)
         if death_manner_id not in death_manners:
             print(
                 '[WARNING] Invalid manner of death {} referenced by inquest with ID: {}. Defaulting to "OTHER".'
@@ -464,20 +356,20 @@ class Migrator:
             )
             death_manner_id = 'OTHER'
 
-        if rlastname == 'YOUTH' and self._string_to_nullable(rgivennames) is None:
+        if rlastname == 'YOUTH' and utils.string_to_nullable(rgivennames) is None:
             # Names not available as by the Youth Criminal Justice Act.
             last_name = None
             given_names = None
         else:
-            last_name = self._format_string(rlastname.title())
-            given_names = self._format_string(rgivennames.title())
+            last_name = utils.format_string(rlastname.title())
+            given_names = utils.format_string(rgivennames.title())
 
-        deceased = Deceased(
+        deceased = models.Deceased(
             inquestId=inquest_id,
             inquestTypeId=inquest_type_id,
             deathMannerId=death_manner_id,
-            deathCause=self._format_string(rcause),
-            deathDate=self._format_date(rdeathdate),
+            deathCause=utils.format_string(rcause),
+            deathDate=utils.format_date(rdeathdate),
             lastName=last_name,
             givenNames=given_names,
             age=rage,
@@ -486,14 +378,14 @@ class Migrator:
         session.add(deceased)
 
         self._authority_serial_to_type[rserial] = self._AUTHORITY_TYPE_INQUEST
-        self._authority_serial_to_name[rserial] = self._format_string(rname)
+        self._authority_serial_to_name[rserial] = utils.format_string(rname)
         self._authority_serial_to_keywords[rserial] = rkeywords
         self._authority_serial_to_id[rserial] = inquest_id
 
     def populate_authority_relationships(self):
         print('[INFO] Populating authority relationships.')
 
-        session = self._session_maker()
+        session = self._db_client.get_session()
 
         for (authority_id, (cited, related)) in self._authority_serial_to_related.items():
             # Map authority to its cited authorities and related authorities.
@@ -518,7 +410,7 @@ class Migrator:
                         )
                         continue
 
-                    session.add(AuthorityCitations(
+                    session.add(models.AuthorityCitations(
                         authorityId=authority_id,
                         citedAuthorityId=self._authority_serial_to_id[authority_serial],
                     ))
@@ -537,12 +429,12 @@ class Migrator:
                         continue
 
                     if self._authority_serial_to_type[authority_serial] == self._AUTHORITY_TYPE_INQUEST:
-                        session.add(AuthorityInquests(
+                        session.add(models.AuthorityInquests(
                             authorityId=authority_id,
                             inquestId=self._authority_serial_to_id[authority_serial],
                         ))
                     else:
-                        session.add(AuthorityRelated(
+                        session.add(models.AuthorityRelated(
                             authorityId=authority_id,
                             relatedAuthorityId=self._authority_serial_to_id[authority_serial],
                         ))
@@ -552,7 +444,7 @@ class Migrator:
     def populate_authority_and_inquest_keywords(self):
         print('[INFO] Populating authority and inquest keywords.')
 
-        session = self._session_maker()
+        session = self._db_client.get_session()
 
         for authority_serial, keywords in self._authority_serial_to_keywords.items():
             for keyword in keywords.split(','):
@@ -566,7 +458,7 @@ class Migrator:
                             .format(keyword, authority_serial)
                         )
                         continue
-                    session.add(AuthorityKeywords(
+                    session.add(models.AuthorityKeywords(
                         authorityId=self._authority_serial_to_id[authority_serial],
                         authorityKeywordId=self._authority_keyword_name_to_id[keyword],
                     ))
@@ -577,7 +469,7 @@ class Migrator:
                             .format(keyword, authority_serial)
                         )
                         continue
-                    session.add(InquestKeywords(
+                    session.add(models.InquestKeywords(
                         inquestId=self._authority_serial_to_id[authority_serial],
                         inquestKeywordId=self._inquest_keyword_name_to_id[keyword],
                     ))
@@ -587,7 +479,7 @@ class Migrator:
     def populate_documents(self):
         print('[INFO] Populating authority and inquest documents.')
 
-        session = self._session_maker()
+        session = self._db_client.get_session()
 
         document_sources = set()
 
@@ -596,11 +488,11 @@ class Migrator:
 
             if rlinktype != 'No Publish':
                 # Create document source type (i.e., the location where the document is stored) if it does not exist.
-                document_source_id = self._format_as_id(rlinktype)
+                document_source_id = utils.format_as_id(rlinktype)
                 if document_source_id not in document_sources:
-                    session.add(DocumentSource(
+                    session.add(models.DocumentSource(
                         documentSourceId=document_source_id,
-                        name=self._format_string(rlinktype),
+                        name=utils.format_string(rlinktype),
                     ))
                     session.flush()
                     document_sources.add(document_source_id)
@@ -657,19 +549,19 @@ class Migrator:
                         )
 
                 if self._authority_serial_to_type[authority_serial] == self._AUTHORITY_TYPE_AUTHORITY:
-                    authority_document = AuthorityDocument(
+                    authority_document = models.AuthorityDocument(
                         authorityId=self._authority_serial_to_id[authority_serial],
                         authorityDocumentTypeId=None,
                         sourceId=self._source_serial_to_id(rsource),
                         isPrimary=rcitation == self._authority_serial_to_primary_document[authority_serial],
-                        name=self._format_string(rshortname),
-                        citation=self._format_string(rcitation),
-                        created=self._format_date(rdate),
+                        name=utils.format_string(rshortname),
+                        citation=utils.format_string(rcitation),
+                        created=utils.format_date(rdate),
                     )
                     session.add(authority_document)
                     session.flush()
                     if link is not None:
-                        session.add(AuthorityDocumentLinks(
+                        session.add(models.AuthorityDocumentLinks(
                             authorityDocumentId=authority_document.authorityDocumentId,
                             documentSourceId=document_source_id,
                             link=link,
@@ -681,16 +573,16 @@ class Migrator:
                     else:
                         document_name = rshortname
 
-                    inquest_document = InquestDocument(
+                    inquest_document = models.InquestDocument(
                         inquestId=self._authority_serial_to_id[authority_serial],
                         inquestDocumentTypeId=None,
-                        name=self._format_string(document_name),
-                        created=self._format_date(rdate),
+                        name=utils.format_string(document_name),
+                        created=utils.format_date(rdate),
                     )
                     session.add(inquest_document)
                     session.flush()
                     if link is not None:
-                        session.add(InquestDocumentLinks(
+                        session.add(models.InquestDocumentLinks(
                             inquestDocumentId=inquest_document.inquestDocumentId,
                             documentSourceId=document_source_id,
                             link=link,
@@ -701,7 +593,7 @@ class Migrator:
     def validate(self):
         print('[INFO] Running SQL validation scripts.')
 
-        session = self._session_maker()
+        session = self._db_client.get_session()
 
         # Invert mapping of authority IDs to map new IDs to input IDs.
         authority_id_to_serial = {
@@ -745,7 +637,7 @@ class Migrator:
             inquest_id = row[0]
             print(
                  '[WARNING] Inquest {} does not have any documents.'
-                .format(inquest_id_to_serial[inquest_id], count)
+                .format(inquest_id_to_serial[inquest_id])
             )
 
         # Ensure each authority has at least one keyword.
@@ -761,7 +653,7 @@ class Migrator:
             authority_id = row[0]
             print(
                  '[WARNING] Authority {} does not have any keywords.'
-                .format(authority_id_to_serial[authority_id], count)
+                .format(authority_id_to_serial[authority_id])
             )
 
         # Ensure each inquest has at least one keyword.
@@ -777,7 +669,7 @@ class Migrator:
             inquest_id = row[0]
             print(
                  '[WARNING] Inquest {} does not have any keywords.'
-                .format(inquest_id_to_serial[inquest_id], count)
+                .format(inquest_id_to_serial[inquest_id])
             )
 
         # Ensure each inquest has at least one CAUSE keyword.
@@ -794,7 +686,7 @@ class Migrator:
             inquest_id = row[0]
             print(
                  '[WARNING] Inquest {} does not have any CAUSE keywords.'
-                .format(inquest_id_to_serial[inquest_id], count)
+                .format(inquest_id_to_serial[inquest_id])
             )
 
 
