@@ -12,7 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from openpyxl import load_workbook
 
-from db.models import *
+from models import *
 
 
 class Migrator:

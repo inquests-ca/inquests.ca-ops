@@ -1,4 +1,4 @@
-from sqlalchemy import CHAR, Column, Date, String, Table, text
+from sqlalchemy import CHAR, Column, Date, String, text
 from sqlalchemy.dialects.mysql import INTEGER, TINYINT
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -146,7 +146,10 @@ class InquestDocument(Base):
 
     inquestDocumentId = Column(INTEGER(10), primary_key=True)
     inquestId = Column(INTEGER(10), nullable=False)
-    inquestDocumentTypeId = Column(CHAR(100), comment='E.g., verdict, ruling, exhibit.\\nCan be NULL if document falls into misc. category.')
+    inquestDocumentTypeId = Column(
+        CHAR(100),
+        comment='E.g., verdict, ruling, exhibit.\\nCan be NULL if document falls into misc. category.'
+    )
     name = Column(String(255))
     created = Column(Date)
 
