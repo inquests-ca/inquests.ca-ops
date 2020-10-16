@@ -15,7 +15,7 @@ class Authority(Base):
     overview = Column(String(255))
     synopsis = Column(String(10000))
     quotes = Column(String(10000))
-    notes = Column(String(1000))
+    notes = Column(String(5000))
 
 
 class AuthorityCategory(Base):
@@ -97,7 +97,7 @@ class Inquest(Base):
     name = Column(String(255), nullable=False)
     overview = Column(String(255))
     synopsis = Column(String(10000))
-    notes = Column(String(1000))
+    notes = Column(String(5000))
     presidingOfficer = Column(String(255))
     start = Column(Date)
     end = Column(Date)
