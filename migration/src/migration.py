@@ -478,7 +478,7 @@ class Migrator:
         for row in self._read_workbook('docs'):
             rauthorities, rserial, rshortname, rcitation, rdate, rlink, rlinktype, rsource = row
 
-            if rlinktype != 'No Publish':
+            if rlinktype.lower() != 'no publish':
                 # Create document source type (i.e., the location where the document is stored) if it does not exist.
                 document_source_id = utils.format_as_id(rlinktype)
                 if document_source_id not in document_sources:
@@ -508,7 +508,7 @@ class Migrator:
 
                 # Upload document to S3 if respective file exists locally.
                 link = None
-                if rlinktype == 'Inquests.ca':
+                if rlinktype.lower() == 'inquests.ca':
                     if rlink is not None and len(rlink) != 0:
                         logger.warning(
                             'Document %s has source Inquests.ca and non-null link: %s',
@@ -517,7 +517,7 @@ class Migrator:
                     s3_link = self._upload_document_if_exists(rshortname, rdate, rsource, rserial, authority_serial)
                     if s3_link is not None:
                         link = s3_link
-                elif rlinktype == 'No Publish':
+                elif rlinktype.lower() == 'no publish':
                     if rlink is not None and len(rlink) != 0:
                         logger.warning(
                             'Document %s has flag No Publish and non-null link: %s',
