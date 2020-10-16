@@ -6,42 +6,17 @@ in the CLI.
 """
 
 import argparse
-import datetime
-import logging
 import re
 import subprocess
 
+from logger import logger
 from migration import Migrator
 
 LOCAL_DATABASE_URL = "mysql+pymysql://root@127.0.0.1:3306/"
 
 
-def _configure_logging():
-    # TODO: do not use root logger, since this is used by other services.
-    log_debug_file = './logs/{}.txt'.format(datetime.datetime.now().strftime('%Y-%m-%d'))
-    log_warning_file = './logs/warnings.txt'
-
-    log_format = "[%(levelname)s] %(message)s"
-
-    warning_handler = logging.FileHandler(log_warning_file, mode='w')
-    warning_handler.setLevel(logging.WARNING)
-
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(logging.INFO)
-    stream_handler.setFormatter(logging.Formatter(log_format))
-
-    logging.basicConfig(
-        format=log_format,
-        filename=log_debug_file,
-        filemode='w',
-        level=logging.DEBUG
-    )
-    logging.getLogger().addHandler(warning_handler)
-    logging.getLogger().addHandler(stream_handler)
-
-
 def _init_db():
-    logging.info('Initializing DB schema.')
+    logger.info('Initializing DB schema.')
 
     with open("../mysql_workbench/inquestsca.sql", "r") as mysql_script:
         subprocess.run(['mysql', '-u', 'root'], stdin=mysql_script, check=True)
@@ -84,11 +59,10 @@ def _migrate_prod(local_database):
     ]
     subprocess.run(mysql_args, stdin=mysqldump_process.stdout, check=True)
 
-    logging.info('Successfully promoted data to production.')
+    logger.info('Successfully promoted data to production.')
 
 
 if __name__ == '__main__':
-    _configure_logging()
     _init_db()
 
     args = _parse_args()
@@ -105,4 +79,4 @@ if __name__ == '__main__':
     if migrate_prod == 'Y':
         _migrate_prod(args.db)
 
-    logging.info('Script completed without errors.')
+    logger.info('Script completed without errors.')

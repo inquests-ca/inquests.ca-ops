@@ -1,4 +1,3 @@
-import logging
 import os
 import re
 
@@ -8,6 +7,7 @@ from openpyxl import load_workbook
 import models
 import utils
 from db import DatabaseClient
+from logger import logger
 from s3 import S3Client
 
 
@@ -34,7 +34,7 @@ class Migrator:
         self._authority_serial_to_name = {}
         self._authority_serial_to_keywords = {}
         self._authority_serial_to_primary_document = {}
-    
+
     def run(self):
         # This operation must be done first to satisfy FK constraints.
         self.populate_keywords()
@@ -89,7 +89,7 @@ class Migrator:
     def _upload_document_if_exists(self, name, date, source, serial, authority_serial):
         """Upload document file to S3 if one exists locally."""
         if serial is None:
-            logging.warning('No serial for document: %s', name)
+            logger.warning('No serial for document: %s', name)
             return None
 
         # Get file path.
@@ -98,7 +98,7 @@ class Migrator:
 
         # Ensure there is exactly one file per document directory.
         if len(documents) != 1:
-            logging.warning('Document %s has invalid number of files: %d.', serial, len(documents))
+            logger.warning('Document %s has invalid number of files: %d.', serial, len(documents))
             return None
 
         file_path = documents[0].path
@@ -121,18 +121,18 @@ class Migrator:
 
         # Check if file exists to avoid unnecessary writes.
         if self._s3_client.object_exists(key):
-            logging.debug(
+            logger.debug(
                 'Not uploading file since one already exists for document with ID: %s',
                 serial
             )
         else:
             self._s3_client.upload_pdf(file_path, key)
-            logging.debug('Successfully uploaded document with ID: %s, link: %s', serial, link)
+            logger.debug('Successfully uploaded document with ID: %s, link: %s', serial, link)
 
         return link
 
     def populate_keywords(self):
-        logging.info('Populating keywords.')
+        logger.info('Populating keywords.')
 
         session = self._db_client.get_session()
 
@@ -143,7 +143,7 @@ class Migrator:
             rtype, rkeyword, _, rdescription = row
 
             if not self._is_valid_authority_type(rtype):
-                logging.warning('Unknown authority type: %s', rtype)
+                logger.warning('Unknown authority type: %s', rtype)
                 continue
 
             # Most keywords are prefixed by categories (e.g., Cause-Fall from height -> Cause).
@@ -200,7 +200,7 @@ class Migrator:
         session.commit()
 
     def populate_authorities_and_inquests(self):
-        logging.info('Populating authorities and inquests.')
+        logger.info('Populating authorities and inquests.')
 
         session = self._db_client.get_session()
 
@@ -216,7 +216,7 @@ class Migrator:
             elif rtype == self._AUTHORITY_TYPE_INQUEST:
                 rinquests.append(row)
             else:
-                logging.warning(
+                logger.warning(
                     'Unknown authority type: %s referenced by authority with ID: %s',
                     rtype, rserial
                 )
@@ -333,7 +333,7 @@ class Migrator:
 
         inquest_type_id = utils.format_as_id(inquest_type)
         if inquest_type_id not in inquest_types:
-            logging.warning(
+            logger.warning(
                 'Invalid inquest type: %s referenced by inquest with ID: %s. Defaulting to "OTHER".',
                 inquest_type, rserial
             )
@@ -342,7 +342,7 @@ class Migrator:
         # Validate manner of death.
         death_manner_id = utils.format_as_id(rdeathmanner)
         if death_manner_id not in death_manners:
-            logging.warning(
+            logger.warning(
                 'Invalid manner of death %s referenced by inquest with ID: %s. Defaulting to "OTHER".',
                 rdeathmanner, rserial
             )
@@ -375,7 +375,7 @@ class Migrator:
         self._authority_serial_to_id[rserial] = inquest_id
 
     def populate_authority_relationships(self):
-        logging.info('Populating authority relationships.')
+        logger.info('Populating authority relationships.')
 
         session = self._db_client.get_session()
 
@@ -388,7 +388,7 @@ class Migrator:
 
                     # Ignore references to authorities which do not exist.
                     if authority_serial not in self._authority_serial_to_id:
-                        logging.warning(
+                        logger.warning(
                             'Invalid authority %s cited by authority with ID: %s',
                             authority_serial, authority_id
                         )
@@ -396,7 +396,7 @@ class Migrator:
 
                     # Ignore references to inquests.
                     if self._authority_serial_to_type[authority_serial] == self._AUTHORITY_TYPE_INQUEST:
-                        logging.warning(
+                        logger.warning(
                             'Inquest %s cited by authority with ID: %s',
                             authority_serial, authority_id
                         )
@@ -414,7 +414,7 @@ class Migrator:
 
                     # Ignore references to authorities which do not exist.
                     if authority_serial not in self._authority_serial_to_id:
-                        logging.warning(
+                        logger.warning(
                             'Invalid authority %s related to authority with ID: %s',
                             authority_serial, authority_id
                         )
@@ -434,7 +434,7 @@ class Migrator:
         session.commit()
 
     def populate_authority_and_inquest_keywords(self):
-        logging.info('Populating authority and inquest keywords.')
+        logger.info('Populating authority and inquest keywords.')
 
         session = self._db_client.get_session()
 
@@ -445,7 +445,7 @@ class Migrator:
 
                 if self._authority_serial_to_type[authority_serial] == self._AUTHORITY_TYPE_AUTHORITY:
                     if keyword not in self._authority_keyword_name_to_id:
-                        logging.warning(
+                        logger.warning(
                             'Invalid keyword %s referenced by authority with ID: %s',
                             keyword, authority_serial
                         )
@@ -456,7 +456,7 @@ class Migrator:
                     ))
                 else:
                     if keyword not in self._inquest_keyword_name_to_id:
-                        logging.warning(
+                        logger.warning(
                             'Invalid keyword %s referenced by inquest with ID: %s',
                             keyword, authority_serial
                         )
@@ -469,7 +469,7 @@ class Migrator:
         session.commit()
 
     def populate_documents(self):
-        logging.info('Populating authority and inquest documents.')
+        logger.info('Populating authority and inquest documents.')
 
         session = self._db_client.get_session()
 
@@ -491,7 +491,7 @@ class Migrator:
 
             # Ensure document references at least one authority.
             if not any(rauthorities.split('\n')):
-                logging.warning('Document %s does not reference any authorities.', rserial)
+                logger.warning('Document %s does not reference any authorities.', rserial)
 
             # Map authority or inquest to its documents.
             for authority_serial in rauthorities.split('\n'):
@@ -500,7 +500,7 @@ class Migrator:
 
                 # Ignore references to authorities which do not exist.
                 if authority_serial not in self._authority_serial_to_id:
-                    logging.warning(
+                    logger.warning(
                         'Invalid authority %s referenced by document with ID: %s',
                         authority_serial, rserial
                     )
@@ -510,7 +510,7 @@ class Migrator:
                 link = None
                 if rlinktype == 'Inquests.ca':
                     if rlink is not None and len(rlink) != 0:
-                        logging.warning(
+                        logger.warning(
                             'Document %s has source Inquests.ca and non-null link: %s',
                             rserial, rlink
                         )
@@ -519,17 +519,17 @@ class Migrator:
                         link = s3_link
                 elif rlinktype == 'No Publish':
                     if rlink is not None and len(rlink) != 0:
-                        logging.warning(
+                        logger.warning(
                             'Document %s has flag No Publish and non-null link: %s',
                             rserial, rlink
                         )
                     else:
-                        logging.debug('Not uploading document with No Publish flag: %s', rserial)
+                        logger.debug('Not uploading document with No Publish flag: %s', rserial)
                 else:
                     if rlink is not None and len(rlink) != 0:
                         link = rlink
                     else:
-                        logging.warning('Document %s has null link.', rserial)
+                        logger.warning('Document %s has null link.', rserial)
 
                 if self._authority_serial_to_type[authority_serial] == self._AUTHORITY_TYPE_AUTHORITY:
                     authority_document = models.AuthorityDocument(
@@ -574,7 +574,7 @@ class Migrator:
         session.commit()
 
     def validate(self):
-        logging.info('Running SQL validation scripts.')
+        logger.info('Running SQL validation scripts.')
 
         session = self._db_client.get_session()
 
@@ -602,7 +602,7 @@ class Migrator:
             authority_id, has_primary, count = row
             if not has_primary:
                 count = 0
-            logging.warning(
+            logger.warning(
                 'Authority %s has %d primary documents.',
                 authority_id_to_serial[authority_id], count
             )
@@ -618,7 +618,7 @@ class Migrator:
 
         for row in rows:
             inquest_id = row[0]
-            logging.warning(
+            logger.warning(
                 'Inquest %s does not have any documents.',
                 inquest_id_to_serial[inquest_id]
             )
@@ -634,7 +634,7 @@ class Migrator:
 
         for row in rows:
             authority_id = row[0]
-            logging.warning(
+            logger.warning(
                 'Authority %s does not have any keywords.',
                 authority_id_to_serial[authority_id]
             )
@@ -650,7 +650,7 @@ class Migrator:
 
         for row in rows:
             inquest_id = row[0]
-            logging.warning(
+            logger.warning(
                 'Inquest %s does not have any keywords.',
                 inquest_id_to_serial[inquest_id]
             )
@@ -667,7 +667,7 @@ class Migrator:
 
         for row in rows:
             inquest_id = row[0]
-            logging.warning(
+            logger.warning(
                 'Inquest %s does not have any CAUSE keywords.',
                 inquest_id_to_serial[inquest_id]
             )
