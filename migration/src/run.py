@@ -1,5 +1,8 @@
 """
-Migrates data from Excel to local database and optionally production.
+Parses data from given Excel sheets and inserts data into to the local MySQL
+database and optionally the production MySQL database.
+
+This script requires that the MySQL CLI tools are installed locally.
 
 NOTE: this script should only be run locally since the MySQL password is passed
 in the CLI.
