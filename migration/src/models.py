@@ -6,6 +6,16 @@ Base = declarative_base()
 metadata = Base.metadata
 
 
+class Source(Base):
+    __tablename__ = 'source'
+
+    sourceId = Column(CHAR(100), primary_key=True)
+    jurisdictionId = Column(CHAR(100))
+    name = Column(String(255), nullable=False)
+    code = Column(String(255))
+    rank = Column(INTEGER(10))
+
+
 class Authority(Base):
     __tablename__ = 'authority'
 

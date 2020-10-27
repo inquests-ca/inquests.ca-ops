@@ -36,7 +36,8 @@ class Migrator:
         self._authority_serial_to_primary_document = {}
 
     def run(self):
-        # This operation must be done first to satisfy FK constraints.
+        # These operations must be done first to satisfy FK constraints.
+        self.populate_sources()
         self.populate_keywords()
 
         # This depends on the previous operation.
@@ -61,12 +62,19 @@ class Migrator:
     def _is_valid_authority_type(self, authority_type):
         return authority_type in [self._AUTHORITY_TYPE_AUTHORITY, self._AUTHORITY_TYPE_INQUEST]
 
-    def _jurisdiction_serial_to_id(self, serial):
-        if serial in ['CAN', 'UK', 'US']:
-            return serial
+    def _is_federal_jurisdiction(self, jurisdiction_id):
+        return jurisdiction_id in ['CAN', 'UK', 'US']
+
+    def _jurisdiction_serial_to_id_and_category(self, serial):
+        if serial in ['US', 'CAN']:
+            return (serial, serial)
+        elif serial == 'UKCOM':
+            return ('UK', 'UK')
+        elif serial == 'OTHER':
+            return (None, None)
         else:
-            # Otherwise jurisdiction is Canadian province or territory, so prepend CAN_ to get ID.
-            return 'CAN_{}'.format(serial)
+            # Otherwise jurisdiction is Canadian province or territory.
+            return ('CAN_{}'.format(utils.format_as_id(serial)), 'CAN')
 
     def _source_serial_to_id(self, serial):
         serial_to_id = {
@@ -75,9 +83,9 @@ class Migrator:
             'UKLEG': 'UK_LEG',
             'UKSenC': 'UK_SENC',
             'UKSC': 'UK_SC',
-            'USOTH': 'US_REF',
+            'USOTH': 'US_OTHER',
             'USSC': 'US_SC',
-            'REF': 'REF',
+            'REF': 'OTHER',
         }
 
         if serial in serial_to_id:
@@ -130,6 +138,44 @@ class Migrator:
             logger.debug('Successfully uploaded document with ID: %s, link: %s', serial, link)
 
         return link
+
+    def populate_sources(self):
+        logger.info('Populating sources.')
+
+        session = self._db_client.get_session()
+
+        for row in self._read_workbook('source'):
+            rcode, rdescription, rjurisdiction, _, rrank = row
+
+            if rcode.endswith('OTH'):
+                code = 'OTHER'.join(rcode.rsplit('OTH', 1))
+            elif rcode == 'REF':
+                code = 'OTHER'
+            else:
+                code = rcode
+
+            jurisdiction_serial = (rjurisdiction.split('-', 1)[0]).strip()
+            jurisdiction_id, jurisdiction_category = self._jurisdiction_serial_to_id_and_category(jurisdiction_serial)
+            if not jurisdiction_id:
+                source_id = 'OTHER'
+            elif self._is_federal_jurisdiction(jurisdiction_id) and code.startswith(jurisdiction_id):
+                # Handles sources such as CANLEG and UKSenC.
+                source_id = '{}_{}'.format(jurisdiction_category, code.replace(jurisdiction_id, '', 1))
+            else:
+                source_id = '{}_{}'.format(jurisdiction_category, code)
+
+            rank = int((rrank.split('-', 1)[0]).strip())
+
+            session.add(models.Source(
+                sourceId=utils.format_as_id(source_id),
+                jurisdictionId=jurisdiction_id,
+                name=utils.format_string(rdescription),
+                code=utils.format_as_id(code),
+                rank=rank
+            ))
+            session.flush()
+
+        session.commit()
 
     def populate_keywords(self):
         logger.info('Populating keywords.')
@@ -306,7 +352,7 @@ class Migrator:
             synopsis = match.group(1)
 
         inquest = models.Inquest(
-            jurisdictionId=self._jurisdiction_serial_to_id(rjurisdiction),
+            jurisdictionId=self._jurisdiction_serial_to_id_and_category(rjurisdiction)[0],
             isPrimary=rprimary,
             name=utils.format_string(rname),
             overview=None,
