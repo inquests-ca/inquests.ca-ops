@@ -4,7 +4,7 @@ import logging
 
 def _init_logger():
     log_debug_file = './logs/{}.txt'.format(datetime.datetime.now().strftime('%Y-%m-%d'))
-    log_warning_file = './logs/warnings.txt'
+    log_warning_file = './logs/{}-warnings.txt'.format(datetime.datetime.now().strftime('%Y-%m-%d'))
 
     log_format = "[%(levelname)s] %(message)s"
 
