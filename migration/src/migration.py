@@ -32,7 +32,6 @@ class Migrator:
         self._authority_serial_to_related = {}          # Tuple of related authorities and cited authorities.
         self._authority_serial_to_type = {}             # Type being either authority or inquest.
         self._authority_serial_to_name = {}
-        self._authority_serial_to_keywords = {}
         self._authority_serial_to_primary_document = {}
 
     def run(self):
@@ -45,7 +44,6 @@ class Migrator:
 
         # These operations depend on all previous operations and are independent of each other.
         self.populate_authority_relationships()
-        self.populate_authority_and_inquest_keywords()
         self.populate_documents()
 
         # Run checks to ensure data is valid.
@@ -286,6 +284,7 @@ class Migrator:
                 rcause, rinqtype, rpresidingofficer, rsex, rage, rstart, rend, _, _, _, _, _,
                 rdeathmanner, rexport) = rinquest
 
+            # TODO: does this miss cited or related cases?
             self._create_inquest(
                 session, rserial, rname, rsynopsis, rkeywords, rnotes, rprimary, rjurisdiction,
                 rlastname, rgivennames, rdeathdate, rcause, rinqtype, rpresidingofficer, rsex, rage,
@@ -315,8 +314,26 @@ class Migrator:
         self._authority_serial_to_primary_document[rserial] = rprimarydoc
         self._authority_serial_to_type[rserial] = self._AUTHORITY_TYPE_AUTHORITY
         self._authority_serial_to_name[rserial] = utils.format_string(rname)
-        self._authority_serial_to_keywords[rserial] = rkeywords
         self._authority_serial_to_id[rserial] = authority_id
+
+        self._create_authority_keywords(session, authority_id, rkeywords)
+    
+    def _create_authority_keywords(self, session, authority_id, rkeywords):
+        for keyword in rkeywords.split(','):
+            if keyword == '' or keyword == 'zz_NotYetClassified':
+                continue
+
+            if keyword not in self._authority_keyword_name_to_id:
+                logger.warning(
+                    'Invalid keyword %s referenced by authority with ID: %s',
+                    keyword, authority_id
+                )
+                continue
+
+            session.add(models.AuthorityKeywords(
+                authorityId=authority_id,
+                authorityKeywordId=self._authority_keyword_name_to_id[keyword],
+            ))
 
     def _create_inquest(
             self, session, rserial, rname, rsynopsis, rkeywords, rnotes, rprimary, rjurisdiction,
@@ -417,8 +434,26 @@ class Migrator:
 
         self._authority_serial_to_type[rserial] = self._AUTHORITY_TYPE_INQUEST
         self._authority_serial_to_name[rserial] = utils.format_string(rname)
-        self._authority_serial_to_keywords[rserial] = rkeywords
         self._authority_serial_to_id[rserial] = inquest_id
+
+        self._create_inquest_keywords(session, inquest_id, rkeywords)
+    
+    def _create_inquest_keywords(self, session, inquest_id, rkeywords):
+        for keyword in rkeywords.split(','):
+            if keyword == '' or keyword == 'zz_NotYetClassified':
+                continue
+
+            if keyword not in self._inquest_keyword_name_to_id:
+                logger.warning(
+                    'Invalid keyword %s referenced by inquest with ID: %s',
+                    keyword, inquest_id
+                )
+                continue
+
+            session.add(models.InquestKeywords(
+                inquestId=inquest_id,
+                inquestKeywordId=self._inquest_keyword_name_to_id[keyword],
+            ))
 
     def populate_authority_relationships(self):
         logger.info('Populating authority relationships.')
@@ -476,41 +511,6 @@ class Migrator:
                             authorityId=authority_id,
                             relatedAuthorityId=self._authority_serial_to_id[authority_serial],
                         ))
-
-        session.commit()
-
-    def populate_authority_and_inquest_keywords(self):
-        logger.info('Populating authority and inquest keywords.')
-
-        session = self._db_client.get_session()
-
-        for authority_serial, keywords in self._authority_serial_to_keywords.items():
-            for keyword in keywords.split(','):
-                if keyword == '' or keyword == 'zz_NotYetClassified':
-                    continue
-
-                if self._authority_serial_to_type[authority_serial] == self._AUTHORITY_TYPE_AUTHORITY:
-                    if keyword not in self._authority_keyword_name_to_id:
-                        logger.warning(
-                            'Invalid keyword %s referenced by authority with ID: %s',
-                            keyword, authority_serial
-                        )
-                        continue
-                    session.add(models.AuthorityKeywords(
-                        authorityId=self._authority_serial_to_id[authority_serial],
-                        authorityKeywordId=self._authority_keyword_name_to_id[keyword],
-                    ))
-                else:
-                    if keyword not in self._inquest_keyword_name_to_id:
-                        logger.warning(
-                            'Invalid keyword %s referenced by inquest with ID: %s',
-                            keyword, authority_serial
-                        )
-                        continue
-                    session.add(models.InquestKeywords(
-                        inquestId=self._authority_serial_to_id[authority_serial],
-                        inquestKeywordId=self._inquest_keyword_name_to_id[keyword],
-                    ))
 
         session.commit()
 
