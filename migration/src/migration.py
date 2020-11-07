@@ -23,12 +23,12 @@ class Migrator:
         self._db_client = DatabaseClient(db_url)
         self._s3_client = S3Client(bucket='inquests-ca-resources')
 
-        # Mappings from input data attributes to new IDs.
-        self._authority_keyword_name_to_id = {}
-        self._inquest_keyword_name_to_id = {}
-        self._authority_serial_to_id = {}
+        # Sets of authority and inquest keywords.
+        self._authority_keyword_ids = set()
+        self._inquest_keyword_ids = set()
 
         # Mappings from authority serial to various attributes.
+        self._authority_serial_to_id = {}
         self._authority_serial_to_related = {}          # Tuple of related authorities and cited authorities.
         self._authority_serial_to_type = {}             # Type being either authority or inquest.
         self._authority_serial_to_name = {}
@@ -91,6 +91,12 @@ class Migrator:
         else:
             # In the default case, prepend CAN_ to serial to get ID.
             return 'CAN_{}'.format(serial)
+    
+    def _keyword_name_to_id(self, keyword):
+        if keyword is None or keyword.strip() == '' or keyword == 'zz_NotYetClassified':
+            return None
+
+        return utils.format_as_id(keyword)
 
     def _upload_document_if_exists(self, name, date, source, serial, authority_serial):
         """Upload document file to S3 if one exists locally."""
@@ -180,8 +186,16 @@ class Migrator:
 
         session = self._db_client.get_session()
 
-        authority_categories = set()
-        inquest_categories = set()
+        authority_categories = {
+            'EVIDENCE',
+            'FACTOR',
+            'INQUEST',
+        }
+        inquest_categories = {
+            'CAUSE',
+            'FACTOR',
+            'INQUEST',
+        }
 
         for row in self._read_workbook('keywords'):
             rtype, rkeyword, _, rdescription = row
@@ -190,54 +204,47 @@ class Migrator:
                 logger.warning('Unknown authority type: %s', rtype)
                 continue
 
-            # Most keywords are prefixed by categories (e.g., Cause-Fall from height -> Cause).
-            # Otherwise, use 'General' as the default category.
+            # Keywords are prefixed by category (e.g., Cause-Fall from height -> Cause).
             if '-' in rkeyword:
-                category = (rkeyword.split('-', 1)[0])
+                category_id = utils.format_as_id(rkeyword.split('-', 1)[0])
             elif rkeyword == 'Evidence General':
                 # Special case where - is not used.
-                category = 'Evidence'
-            else:
-                category = 'General'
+                category_id = 'EVIDENCE'
 
-            # Create category if it does not exist.
-            category_id = utils.format_as_id(category)
-            if rtype == self._AUTHORITY_TYPE_AUTHORITY and category_id not in authority_categories:
-                session.add(models.AuthorityCategory(
-                    authorityCategoryId=category_id,
-                    name=utils.format_string(category.title()),
-                    description=rdescription
-                ))
-                authority_categories.add(category_id)
-            elif rtype == self._AUTHORITY_TYPE_INQUEST and category_id not in inquest_categories:
-                session.add(models.InquestCategory(
-                    inquestCategoryId=category_id,
-                    name=utils.format_string(category.title()),
-                    description=rdescription
-                ))
-                inquest_categories.add(category_id)
-            session.flush()
+            keyword_id = self._keyword_name_to_id(rkeyword)
+            if keyword_id is None:
+                logger.warning('Invalid keyword name: %s', rkeyword)
 
-            # Get keyword ID from keyword name (e.g., Cause-Fall from height -> CAUSE_FALL_FROM_HEIGHT).
-            keyword_id = utils.format_as_id(rkeyword)
             # Name keyword without category (e.g., Cause-Fall from height -> Fall from height)
             keyword_name = (rkeyword.split('-', 1)[1]) if '-' in rkeyword else rkeyword
 
             if rtype == self._AUTHORITY_TYPE_AUTHORITY:
-                self._authority_keyword_name_to_id[rkeyword] = keyword_id
+                if category_id not in authority_categories:
+                    logger.warning(
+                        'Invalid category: %s referenced by authority keyword: %s',
+                        category_id, rkeyword
+                    )
+                    continue
+                self._authority_keyword_ids.add(keyword_id)
                 model = models.AuthorityKeyword(
                     authorityKeywordId=keyword_id,
                     authorityCategoryId=category_id,
                     name=keyword_name,
-                    description=None,
+                    description=rdescription,
                 )
             else:
-                self._inquest_keyword_name_to_id[rkeyword] = keyword_id
+                if category_id not in inquest_categories:
+                    logger.warning(
+                        'Invalid category: %s referenced by inquest keyword: %s',
+                        category_id, rkeyword
+                    )
+                    continue
+                self._inquest_keyword_ids.add(keyword_id)
                 model = models.InquestKeyword(
                     inquestKeywordId=keyword_id,
                     inquestCategoryId=category_id,
                     name=keyword_name,
-                    description=None,
+                    description=rdescription,
                 )
             session.add(model)
 
@@ -320,10 +327,11 @@ class Migrator:
     
     def _create_authority_keywords(self, session, authority_id, rkeywords):
         for keyword in rkeywords.split(','):
-            if keyword == '' or keyword == 'zz_NotYetClassified':
+            keyword_id = self._keyword_name_to_id(keyword)
+            if keyword_id is None:
                 continue
 
-            if keyword not in self._authority_keyword_name_to_id:
+            if keyword_id not in self._authority_keyword_ids:
                 logger.warning(
                     'Invalid keyword %s referenced by authority with ID: %s',
                     keyword, authority_id
@@ -332,7 +340,7 @@ class Migrator:
 
             session.add(models.AuthorityKeywords(
                 authorityId=authority_id,
-                authorityKeywordId=self._authority_keyword_name_to_id[keyword],
+                authorityKeywordId=keyword_id,
             ))
 
     def _create_inquest(
@@ -440,10 +448,11 @@ class Migrator:
     
     def _create_inquest_keywords(self, session, inquest_id, rkeywords):
         for keyword in rkeywords.split(','):
-            if keyword == '' or keyword == 'zz_NotYetClassified':
+            keyword_id = self._keyword_name_to_id(keyword)
+            if keyword_id is None:
                 continue
 
-            if keyword not in self._inquest_keyword_name_to_id:
+            if keyword_id not in self._inquest_keyword_ids:
                 logger.warning(
                     'Invalid keyword %s referenced by inquest with ID: %s',
                     keyword, inquest_id
@@ -452,7 +461,7 @@ class Migrator:
 
             session.add(models.InquestKeywords(
                 inquestId=inquest_id,
-                inquestKeywordId=self._inquest_keyword_name_to_id[keyword],
+                inquestKeywordId=keyword_id,
             ))
 
     def populate_authority_relationships(self):

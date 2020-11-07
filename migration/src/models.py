@@ -28,28 +28,12 @@ class Authority(Base):
     notes = Column(String(5000))
 
 
-class AuthorityCategory(Base):
-    __tablename__ = 'authorityCategory'
-
-    authorityCategoryId = Column(CHAR(100), primary_key=True)
-    name = Column(String(255), nullable=False)
-    description = Column(String(255))
-
-
 class DocumentSource(Base):
     __tablename__ = 'documentSource'
 
     documentSourceId = Column(CHAR(100), primary_key=True)
     name = Column(String(255), nullable=False)
     hasPaywall = Column(TINYINT(3), server_default=text("'0'"))
-
-
-class InquestCategory(Base):
-    __tablename__ = 'inquestCategory'
-
-    inquestCategoryId = Column(CHAR(100), primary_key=True)
-    name = Column(String(255), nullable=False)
-    description = Column(String(255))
 
 
 class AuthorityCitations(Base):
@@ -65,7 +49,7 @@ class AuthorityKeyword(Base):
     authorityKeywordId = Column(CHAR(100), primary_key=True)
     authorityCategoryId = Column(CHAR(100))
     name = Column(String(255), nullable=False)
-    description = Column(String(255))
+    description = Column(String(1000))
 
 
 class AuthorityRelated(Base):
@@ -88,7 +72,7 @@ class InquestKeyword(Base):
     inquestKeywordId = Column(CHAR(100), primary_key=True)
     inquestCategoryId = Column(CHAR(100))
     name = Column(String(255), nullable=False)
-    description = Column(String(255))
+    description = Column(String(1000))
 
 
 class AuthorityKeywords(Base):
