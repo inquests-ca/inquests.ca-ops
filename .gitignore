@@ -1,4 +1,6 @@
 .DS_Store
-pyenv/
+*.bak
+*.pyc
 __pycache__/
+pyenv/
 logs/
