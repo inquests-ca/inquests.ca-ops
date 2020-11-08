@@ -6,12 +6,23 @@ def format_as_id(name):
     """Formats string to an appropriate ID."""
     return (
         name
+            .strip()
             .upper()
             .replace('-', '_')
             .replace(' ', '_')
             .replace('.', '_')
             .replace('/', '_')
     )
+
+
+def format_as_keyword(name):
+    """Formats string to an appropriate keyword."""
+    if is_empty_string(name):
+        return format_string(name)
+
+    # Avoid use of string.capitalize() since it will lowercase all other letters, which is
+    # undesired for abbreviations.
+    return name.strip()[0].upper() + name.strip()[1:]
 
 
 def nullable_to_string(string):
@@ -21,15 +32,21 @@ def nullable_to_string(string):
     return format_string(string)
 
 
+def is_empty_string(string):
+    """Return True if string is None or entirely whitespace."""
+    return string is None or string.strip() == ''
+
+
 def string_to_nullable(string):
     """If string is empty, return None"""
-    if string is None or string.strip() == '':
+    if is_empty_string(string):
         return None
     return format_string(string)
 
 
 def format_string(string):
     """Format string before inserting into database. Currently only trims whitespace."""
+    # TODO: also perform spell and grammar checks?
     if string is None:
         return None
     return string.strip()
