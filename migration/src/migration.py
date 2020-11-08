@@ -366,10 +366,7 @@ class Migrator:
 
             # Note that MySQL is case-insensitive for the UNIQUE constraint.
             if tag.lower() in tags:
-                logger.warning(
-                    'Authority: %s, tag: "%s" is duplicated.',
-                    rserial, tag
-                )
+                logger.debug('Authority: %s, tag: "%s" is duplicated.', rserial, tag)
                 continue
 
             tags.add(tag.lower())
@@ -520,10 +517,7 @@ class Migrator:
 
             # Note that MySQL is case-insensitive for the UNIQUE constraint.
             if tag.lower() in tags:
-                logger.warning(
-                    'Inquest: %s, tag: "%s" is duplicated.',
-                    rserial, tag
-                )
+                logger.debug('Inquest: %s, tag: "%s" is duplicated.', rserial, tag)
                 continue
 
             tags.add(tag.lower())
