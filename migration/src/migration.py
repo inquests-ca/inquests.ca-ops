@@ -274,7 +274,7 @@ class Migrator:
                 continue
 
         for rauthority in rauthorities:
-            (rserial, rname, _, _, rsynopsis, rkeywords, _, rquotes, rnotes, rprimary, _, _,
+            (rserial, rname, _, _, rsynopsis, rkeywords, rtags, rquotes, rnotes, rprimary, _, _,
                 roverview, _, _, _, _, _, rprimarydoc, _, rcited, rrelated, _, _, _, _, _, _, _, _,
                 _, _, _, _, _, _, _, _, _, _, _, rexport) = rauthority
 
@@ -289,11 +289,12 @@ class Migrator:
             self._authority_serial_to_related[authority_id] = (rcited, rrelated)
 
             self._create_authority_keywords(session, authority_id, rserial, rkeywords)
+            self._create_authority_tags(session, authority_id, rserial, rtags)
 
         session.commit()
 
         for rinquest in rinquests:
-            (rserial, rname, _, _, rsynopsis, rkeywords, _, _, rnotes, rprimary, _, _, _, _, _,
+            (rserial, rname, _, _, rsynopsis, rkeywords, rtags, _, rnotes, rprimary, _, _, _, _, _,
                 rjurisdiction, _, _, _, _, _, _, _, _, _, rlastname, rgivennames, rdeathdate,
                 rcause, rinqtype, rpresidingofficer, rsex, rage, rstart, rend, _, _, _, _, _,
                 rdeathmanner, rexport) = rinquest
@@ -313,6 +314,7 @@ class Migrator:
                 rsex, rage, rdeathmanner
             )
             self._create_inquest_keywords(session, inquest_id, rserial, rkeywords)
+            self._create_inquest_tags(session, inquest_id, rserial, rtags)
 
         session.commit()
 
@@ -351,6 +353,39 @@ class Migrator:
             session.add(models.AuthorityKeywords(
                 authorityId=authority_id,
                 authorityKeywordId=keyword_id,
+            ))
+
+    def _create_authority_tags(self, session, authority_id, rserial, rtags):
+        tags = set()
+
+        for tag in re.split(r'[,\n]', rtags):
+            if utils.is_empty_string(tag):
+                continue
+
+            tag = utils.format_as_keyword(tag)
+
+            # Note that MySQL is case-insensitive for the UNIQUE constraint.
+            if tag.lower() in tags:
+                logger.warning(
+                    'Tag: %s is duplicated for authority with ID: %s',
+                    tag, rserial
+                )
+                continue
+
+            tags.add(tag.lower())
+
+            if utils.format_as_id(tag) in self._authority_keyword_ids:
+                # Currently the extended keywords field includes structured keywords as well.
+                # TODO: replace with warning.
+                logger.debug(
+                    'Tag: %s should be replaced with keyword for authority with ID: %s',
+                    tag, rserial
+                )
+                continue
+
+            session.add(models.AuthorityTags(
+                authorityId=authority_id,
+                tag=tag,
             ))
 
     def _create_inquest(
@@ -471,6 +506,40 @@ class Migrator:
             session.add(models.InquestKeywords(
                 inquestId=inquest_id,
                 inquestKeywordId=keyword_id,
+            ))
+
+    def _create_inquest_tags(self, session, inquest_id, rserial, rtags):
+        tags = set()
+
+        # Skip the first 3 tags since they simply contain the inquest name.
+        for tag in re.split(r'[,\n]', rtags)[3:]:
+            if utils.is_empty_string(tag):
+                continue
+
+            tag = utils.format_as_keyword(tag)
+
+            # Note that MySQL is case-insensitive for the UNIQUE constraint.
+            if tag.lower() in tags:
+                logger.warning(
+                    'Tag: %s is duplicated for inquest with ID: %s',
+                    tag, rserial
+                )
+                continue
+
+            tags.add(tag.lower())
+
+            if utils.format_as_id(tag) in self._inquest_keyword_ids:
+                # Currently the extended keywords field includes structured keywords as well.
+                # TODO: replace with warning.
+                logger.debug(
+                    'Tag: %s should be replaced with keyword for inquest with ID: %s',
+                    tag, rserial
+                )
+                continue
+
+            session.add(models.InquestTags(
+                inquestId=inquest_id,
+                tag=tag,
             ))
 
     def populate_authority_relationships(self):

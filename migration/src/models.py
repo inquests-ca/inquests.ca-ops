@@ -82,6 +82,13 @@ class AuthorityKeywords(Base):
     authorityKeywordId = Column('authorityKeywordId', CHAR(100), primary_key=True, nullable=False)
 
 
+class AuthorityTags(Base):
+    __tablename__ = 'authorityTags'
+
+    authorityId = Column('authorityId', INTEGER(10), primary_key=True, nullable=False)
+    tag = Column('tag', String(255), primary_key=True, nullable=False)
+
+
 class Inquest(Base):
     __tablename__ = 'inquest'
 
@@ -161,6 +168,13 @@ class InquestKeywords(Base):
 
     inquestId = Column('inquestId', INTEGER(10), primary_key=True, nullable=False)
     inquestKeywordId = Column('inquestKeywordId', CHAR(100), primary_key=True, nullable=False)
+
+
+class InquestTags(Base):
+    __tablename__ = 'inquestTags'
+
+    inquestId = Column('inquestId', INTEGER(10), primary_key=True, nullable=False)
+    tag = Column('tag', String(255), primary_key=True, nullable=False)
 
 
 class AuthorityDocumentLinks(Base):
