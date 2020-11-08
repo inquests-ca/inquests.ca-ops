@@ -291,11 +291,15 @@ class Migrator:
 
         for rinquest in rinquests:
             (rserial, rname, _, _, rsynopsis, rkeywords, rtags, _, rnotes, rprimary, _, _, _, _, _,
-                rjurisdiction, _, _, _, _, _, _, _, _, _, rlastname, rgivennames, rdeathdate,
-                rcause, rinqtype, rpresidingofficer, rsex, rage, rstart, rend, _, _, _, _, _,
-                rdeathmanner, rexport) = rinquest
+                rjurisdiction, _, _, _, _, rcited, rrelated, _, _, _, rlastname, rgivennames,
+                rdeathdate, rcause, rinqtype, rpresidingofficer, rsex, rage, rstart, rend, _, _, _,
+                _, _, rdeathmanner, rexport) = rinquest
 
-            # TODO: does this miss cited or related cases?
+            if not utils.is_empty_string(rcited):
+                logger.warning('Inquest: %s has citations, ignoring.', rserial)
+            if not utils.is_empty_string(rrelated):
+                logger.warning('Inquest: %s has related authorities, ignoring.', rserial)
+
             inquest_id = self._create_inquest(
                 session, rserial, rname, rsynopsis, rnotes, rprimary, rjurisdiction,
                 rpresidingofficer, rstart, rend, rexport
