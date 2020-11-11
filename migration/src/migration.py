@@ -338,6 +338,9 @@ class Migrator:
         return authority_id
 
     def _create_authority_keywords(self, session, authority_id, rserial, rkeywords):
+        if utils.is_empty_string(rkeywords):
+            return
+
         for keyword in rkeywords.split(','):
             keyword_id = self._keyword_name_to_id(keyword)
             if keyword_id is None:
@@ -356,6 +359,9 @@ class Migrator:
             ))
 
     def _create_authority_tags(self, session, authority_id, rserial, rtags):
+        if utils.is_empty_string(rtags):
+            return
+
         tags = set()
 
         for tag in re.split(r'[,\n]', rtags):
@@ -366,19 +372,8 @@ class Migrator:
 
             # Note that MySQL is case-insensitive for the UNIQUE constraint.
             if tag.lower() in tags:
-                logger.debug('Authority: %s, tag: "%s" is duplicated.', rserial, tag)
                 continue
-
             tags.add(tag.lower())
-
-            if utils.format_as_id(tag) in self._authority_keyword_ids:
-                # Currently the extended keywords field includes structured keywords as well.
-                # TODO: replace with warning.
-                logger.debug(
-                    'Authority: %s, tag: "%s" should be replaced with keyword.',
-                    rserial, tag
-                )
-                continue
 
             session.add(models.AuthorityTags(
                 authorityId=authority_id,
@@ -488,6 +483,9 @@ class Migrator:
         session.add(deceased)
 
     def _create_inquest_keywords(self, session, inquest_id, rserial, rkeywords):
+        if utils.is_empty_string(rkeywords):
+            return
+
         for keyword in rkeywords.split(','):
             keyword_id = self._keyword_name_to_id(keyword)
             if keyword_id is None:
@@ -506,10 +504,12 @@ class Migrator:
             ))
 
     def _create_inquest_tags(self, session, inquest_id, rserial, rtags):
+        if utils.is_empty_string(rtags):
+            return
+
         tags = set()
 
-        # Skip the first 3 tags since they simply contain the inquest name.
-        for tag in re.split(r'[,\n]', rtags)[3:]:
+        for tag in re.split(r'[,\n]', rtags):
             if utils.is_empty_string(tag):
                 continue
 
@@ -517,19 +517,8 @@ class Migrator:
 
             # Note that MySQL is case-insensitive for the UNIQUE constraint.
             if tag.lower() in tags:
-                logger.debug('Inquest: %s, tag: "%s" is duplicated.', rserial, tag)
                 continue
-
             tags.add(tag.lower())
-
-            if utils.format_as_id(tag) in self._inquest_keyword_ids:
-                # Currently the extended keywords field includes structured keywords as well.
-                # TODO: replace with warning.
-                logger.debug(
-                    'Inquest: %s, tag: "%s" should be replaced with keyword.',
-                    rserial, tag
-                )
-                continue
 
             session.add(models.InquestTags(
                 inquestId=inquest_id,
