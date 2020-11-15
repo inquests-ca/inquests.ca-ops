@@ -8,22 +8,22 @@ def _init_logger():
 
     log_format = "[%(levelname)s] %(message)s"
 
-    debug_handler = logging.FileHandler(log_debug_file, mode='w')
-    debug_handler.setLevel(logging.DEBUG)
-    debug_handler.setFormatter(logging.Formatter(log_format))
+    debug_file_handler = logging.FileHandler(log_debug_file, mode='w')
+    debug_file_handler.setLevel(logging.DEBUG)
+    debug_file_handler.setFormatter(logging.Formatter(log_format))
 
-    info_handler = logging.StreamHandler()
-    info_handler.setLevel(logging.INFO)
-    info_handler.setFormatter(logging.Formatter(log_format))
+    debug_stream_handler = logging.StreamHandler()
+    debug_stream_handler.setLevel(logging.DEBUG)
+    debug_stream_handler.setFormatter(logging.Formatter(log_format))
 
-    warning_handler = logging.FileHandler(log_warning_file, mode='w')
-    warning_handler.setLevel(logging.WARNING)
+    warning_file_handler = logging.FileHandler(log_warning_file, mode='w')
+    warning_file_handler.setLevel(logging.WARNING)
 
     migration_logger = logging.getLogger('migration')
     migration_logger.setLevel(logging.DEBUG)
-    migration_logger.addHandler(debug_handler)
-    migration_logger.addHandler(info_handler)
-    migration_logger.addHandler(warning_handler)
+    migration_logger.addHandler(debug_file_handler)
+    migration_logger.addHandler(debug_stream_handler)
+    migration_logger.addHandler(warning_file_handler)
 
     return migration_logger
 
