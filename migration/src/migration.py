@@ -258,6 +258,7 @@ class Migrator:
             rserial = row[0]
             rtype = row[3]
 
+            # TODO: move below logic for creating authorities and inquests here.
             if rtype == self._AUTHORITY_TYPE_AUTHORITY:
                 rauthorities.append(row)
             elif rtype == self._AUTHORITY_TYPE_INQUEST:
@@ -270,6 +271,7 @@ class Migrator:
                 continue
 
         for rauthority in rauthorities:
+            # TODO: ensure inquest-only fields are empty.
             (rserial, rname, _, _, rsynopsis, rkeywords, rtags, rquotes, rnotes, rprimary, _, _,
                 roverview, _, _, _, _, _, rprimarydoc, _, rcited, rrelated, _, _, _, _, _, _, _, _,
                 _, _, _, _, _, _, _, _, _, _, _, rexport) = rauthority
@@ -285,11 +287,12 @@ class Migrator:
             self._authority_serial_to_related[rserial] = (rcited, rrelated)
 
             self._create_authority_keywords(session, authority_id, rserial, rkeywords)
-            self._create_authority_tags(session, authority_id, rserial, rtags)
+            self._create_authority_tags(session, authority_id, rtags)
 
         session.commit()
 
         for rinquest in rinquests:
+            # TODO: ensure authority-only fields are empty.
             (rserial, rname, _, _, rsynopsis, rkeywords, rtags, _, rnotes, rprimary, _, _, _, _, _,
                 rjurisdiction, _, _, _, _, rcited, rrelated, _, _, _, rlastname, rgivennames,
                 rdeathdate, rcause, rinqtype, rpresidingofficer, rsex, rage, rstart, rend, _, _, _,
@@ -314,7 +317,7 @@ class Migrator:
                 rsex, rage, rdeathmanner
             )
             self._create_inquest_keywords(session, inquest_id, rserial, rkeywords)
-            self._create_inquest_tags(session, inquest_id, rserial, rtags)
+            self._create_inquest_tags(session, inquest_id, rtags)
 
         session.commit()
 
@@ -358,7 +361,7 @@ class Migrator:
                 authorityKeywordId=keyword_id,
             ))
 
-    def _create_authority_tags(self, session, authority_id, rserial, rtags):
+    def _create_authority_tags(self, session, authority_id, rtags):
         if utils.is_empty_string(rtags):
             return
 
@@ -503,7 +506,7 @@ class Migrator:
                 inquestKeywordId=keyword_id,
             ))
 
-    def _create_inquest_tags(self, session, inquest_id, rserial, rtags):
+    def _create_inquest_tags(self, session, inquest_id, rtags):
         if utils.is_empty_string(rtags):
             return
 
