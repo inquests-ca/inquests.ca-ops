@@ -306,7 +306,7 @@ class Migrator:
             )
 
             self._authority_serial_to_type[rserial] = self._AUTHORITY_TYPE_INQUEST
-            self._authority_serial_to_name[rserial] = utils.format_string(rname)
+            self._authority_serial_to_name[rserial] = utils.format_string(rname.replace('Inquest-', '', 1))
             self._authority_serial_to_id[rserial] = inquest_id
 
             self._create_inquest_deceased(
