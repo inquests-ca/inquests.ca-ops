@@ -391,20 +391,12 @@ class Migrator:
         if rname.startswith('Inquest-'):
             rname = rname.replace('Inquest-', '', 1)
 
-        # Parse description from inquest synopsis.
-        match = re.search(r'Manner of Death: .*\s*((.|\n)*)', rsynopsis)
-        if match is None:
-            # Assume that inquest synopsis only contains description of inquest.
-            synopsis = rsynopsis
-        else:
-            synopsis = match.group(1)
-
         inquest = models.Inquest(
             jurisdictionId=self._jurisdiction_serial_to_id_and_category(rjurisdiction)[0],
             isPrimary=rprimary,
             name=utils.format_string(rname),
             overview=None,
-            synopsis=utils.format_string(synopsis),
+            synopsis=utils.nullable_to_string(rsynopsis),
             notes=utils.string_to_nullable(rnotes),
             presidingOfficer=utils.nullable_to_string(rpresidingofficer),
             start=utils.format_date(rstart),
