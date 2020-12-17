@@ -1,0 +1,10 @@
+{
+  "python.linting.pylintArgs": ["--rcfile", "./migration/.pylintrc"],
+  "python.pythonPath": "./migration/pyenv/bin/python",
+  "[python]": {
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": true
+    }
+  }
+}

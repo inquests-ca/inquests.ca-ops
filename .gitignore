@@ -1,2 +1,6 @@
 .DS_Store
-virtualenv/
+*.bak
+*.pyc
+__pycache__/
+pyenv/
+logs/
