@@ -92,11 +92,20 @@ class Migrator:
             # In the default case, prepend CAN_ to serial to get ID.
             return 'CAN_{}'.format(serial)
 
-    def _keyword_name_to_id(self, keyword):
+    def _keyword_serial_to_id(self, keyword):
         if utils.is_empty_string(keyword) or keyword == 'zz_NotYetClassified':
             return None
 
         return utils.format_as_id(keyword)
+
+    def _keyword_serial_to_death_cause(self, keyword):
+        """If keyword begins with "CAUSE-", return rest of keyword. Otherwise, return None."""
+        keyword_split = keyword.split('-', 1)
+        category_id = utils.format_as_id(keyword_split[0])
+        if category_id != 'CAUSE' or len(keyword_split) < 2:
+            return None
+
+        return utils.format_string(keyword_split[1])
 
     def _upload_document_if_exists(self, name, date, source, serial, authority_serial):
         """Upload document file to S3 if one exists locally."""
@@ -207,7 +216,7 @@ class Migrator:
                 # Special case where - is not used.
                 category_id = 'EVIDENCE'
 
-            keyword_id = self._keyword_name_to_id(rkeyword)
+            keyword_id = self._keyword_serial_to_id(rkeyword)
             if keyword_id is None:
                 logger.warning('Keyword: "%s" is invalid.', rkeyword)
 
@@ -225,8 +234,8 @@ class Migrator:
                 model = models.AuthorityKeyword(
                     authorityKeywordId=keyword_id,
                     authorityCategoryId=category_id,
-                    name=keyword_name,
-                    description=rdescription,
+                    name=utils.format_string(keyword_name),
+                    description=utils.format_string(rdescription),
                 )
             else:
                 if category_id not in inquest_categories:
@@ -236,12 +245,22 @@ class Migrator:
                     )
                     continue
                 self._inquest_keyword_ids.add(keyword_id)
-                model = models.InquestKeyword(
-                    inquestKeywordId=keyword_id,
-                    inquestCategoryId=category_id,
-                    name=keyword_name,
-                    description=rdescription,
-                )
+
+                # Note that deathCause is a property of the deceased, not an inquest keyword.
+                death_cause = self._keyword_serial_to_death_cause(rkeyword)
+                if death_cause:
+                    model = models.DeathCause(
+                        deathCauseId=utils.format_as_id(death_cause),
+                        name=utils.format_string(death_cause),
+                        description=utils.format_string(rdescription),
+                    )
+                else:
+                    model = models.InquestKeyword(
+                        inquestKeywordId=keyword_id,
+                        inquestCategoryId=category_id,
+                        name=utils.format_string(keyword_name),
+                        description=utils.format_string(rdescription),
+                    )
             session.add(model)
 
         session.commit()
@@ -313,8 +332,8 @@ class Migrator:
             self._authority_serial_to_id[rserial] = inquest_id
 
             self._create_inquest_deceased(
-                session, inquest_id, rserial, rlastname, rgivennames, rdeathdate, rcause, rinqtype,
-                rsex, rage, rdeathmanner
+                session, inquest_id, rserial, rkeywords, rlastname, rgivennames, rdeathdate, rcause,
+                rinqtype, rsex, rage, rdeathmanner
             )
             self._create_inquest_keywords(session, inquest_id, rserial, rkeywords)
             self._create_inquest_tags(session, inquest_id, rtags)
@@ -345,7 +364,7 @@ class Migrator:
             return
 
         for keyword in rkeywords.split(','):
-            keyword_id = self._keyword_name_to_id(keyword)
+            keyword_id = self._keyword_serial_to_id(keyword)
             if keyword_id is None:
                 continue
 
@@ -413,8 +432,8 @@ class Migrator:
         return inquest_id
 
     def _create_inquest_deceased(
-            self, session, inquest_id, rserial, rlastname, rgivennames, rdeathdate, rcause,
-            rinqtype, rsex, rage, rdeathmanner
+            self, session, inquest_id, rserial, rkeywords, rlastname, rgivennames, rdeathdate,
+            rcause, rinqtype, rsex, rage, rdeathmanner
         ):
         inquest_types = {
             'CONSTRUCTION',
@@ -456,6 +475,18 @@ class Migrator:
             )
             death_manner_id = 'OTHER'
 
+        # Get cause of death from keywords.
+        death_cause_id = None
+        for keyword in rkeywords.split(','):
+            death_cause = self._keyword_serial_to_death_cause(keyword)
+            if death_cause and death_cause_id:
+                logger.warning('Inquest: %s has multiple "CAUSE" keywords.', rserial)
+            elif death_cause:
+                death_cause_id = utils.format_as_id(death_cause)
+        if death_cause_id is None:
+            logger.warning('Inquest: %s does not have a "CAUSE" keyword, skipping.', rserial)
+            return
+
         if rlastname == 'YOUTH' and utils.string_to_nullable(rgivennames) is None:
             # Names not available as by the Youth Criminal Justice Act.
             last_name = None
@@ -468,6 +499,7 @@ class Migrator:
             inquestId=inquest_id,
             inquestTypeId=inquest_type_id,
             deathMannerId=death_manner_id,
+            deathCauseId=death_cause_id,
             deathCause=utils.format_string(rcause),
             deathDate=utils.format_date(rdeathdate),
             lastName=last_name,
@@ -482,7 +514,11 @@ class Migrator:
             return
 
         for keyword in rkeywords.split(','):
-            keyword_id = self._keyword_name_to_id(keyword)
+            if self._keyword_serial_to_death_cause(keyword):
+                # Ignore CAUSE keywords since deathCause is a property of the deceased.
+                continue
+
+            keyword_id = self._keyword_serial_to_id(keyword)
             if keyword_id is None:
                 continue
 
@@ -763,22 +799,5 @@ class Migrator:
             inquest_id = row[0]
             logger.warning(
                 'Inquest: %s does not have any keywords.',
-                inquest_id_to_serial[inquest_id]
-            )
-
-        # Ensure each inquest has at least one CAUSE keyword.
-        query = sqlalchemy.text("""
-            SELECT inquest.inquestId
-            FROM inquestKeywords
-            INNER JOIN inquestKeyword ON inquestKeyword.inquestKeywordId = inquestKeywords.inquestKeywordId AND inquestKeyword.inquestCategoryId = 'CAUSE'
-            RIGHT JOIN inquest ON inquest.inquestId = inquestKeywords.inquestId
-            WHERE inquestKeywords.inquestId IS NULL;
-        """)
-        rows = session.execute(query).fetchall()
-
-        for row in rows:
-            inquest_id = row[0]
-            logger.warning(
-                'Inquest: %s does not have any CAUSE keywords.',
                 inquest_id_to_serial[inquest_id]
             )

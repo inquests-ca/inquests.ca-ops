@@ -134,12 +134,21 @@ class Deceased(Base):
     inquestId = Column(INTEGER(10))
     inquestTypeId = Column(CHAR(100))
     deathMannerId = Column(CHAR(100))
+    deathCauseId = Column(CHAR(100))
     deathCause = Column(String(255))
     deathDate = Column(Date)
     lastName = Column(String(255))
     givenNames = Column(String(255))
     age = Column(INTEGER(11))
     sex = Column(String(255))
+
+
+class DeathCause(Base):
+    __tablename__ = 'deathCause'
+
+    deathCauseId = Column('deathCauseId', CHAR(100), primary_key=True, nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(String(1000))
 
 
 class InquestDocument(Base):
