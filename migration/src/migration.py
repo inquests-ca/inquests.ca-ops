@@ -203,7 +203,7 @@ class Migrator:
         }
 
         for row in self._read_workbook('keywords'):
-            rtype, rkeyword, _, rdescription = row
+            rtype, rkeyword, _, rdescription, rsynonyms = row
 
             if not self._is_valid_authority_type(rtype):
                 logger.warning('Keyword: "%s" has unknown authority type: "%s".', rkeyword, rtype)
@@ -223,6 +223,8 @@ class Migrator:
             # Name keyword without category (e.g., Cause-Fall from height -> Fall from height)
             keyword_name = (rkeyword.split('-', 1)[1]) if '-' in rkeyword else rkeyword
 
+            synonyms = rsynonyms.split(',') if not utils.is_empty_string(rsynonyms) else []
+
             if rtype == self._AUTHORITY_TYPE_AUTHORITY:
                 if category_id not in authority_categories:
                     logger.warning(
@@ -231,12 +233,19 @@ class Migrator:
                     )
                     continue
                 self._authority_keyword_ids.add(keyword_id)
-                model = models.AuthorityKeyword(
+                session.add(models.AuthorityKeyword(
                     authorityKeywordId=keyword_id,
                     authorityCategoryId=category_id,
                     name=utils.format_string(keyword_name),
                     description=utils.format_string(rdescription),
-                )
+                ))
+                session.flush()
+                for synonym in synonyms:
+                    if not utils.is_empty_string(synonym):
+                        session.add(models.AuthorityKeywordSynonyms(
+                            authorityKeywordId=keyword_id,
+                            synonym=utils.format_as_keyword(synonym),
+                        ))
             else:
                 if category_id not in inquest_categories:
                     logger.warning(
@@ -249,19 +258,25 @@ class Migrator:
                 # Note that deathCause is a property of the deceased, not an inquest keyword.
                 death_cause = self._keyword_serial_to_death_cause(rkeyword)
                 if death_cause:
-                    model = models.DeathCause(
+                    session.add(models.DeathCause(
                         deathCauseId=utils.format_as_id(death_cause),
                         name=utils.format_string(death_cause),
                         description=utils.format_string(rdescription),
-                    )
+                    ))
                 else:
-                    model = models.InquestKeyword(
+                    session.add(models.InquestKeyword(
                         inquestKeywordId=keyword_id,
                         inquestCategoryId=category_id,
                         name=utils.format_string(keyword_name),
                         description=utils.format_string(rdescription),
-                    )
-            session.add(model)
+                    ))
+                    session.flush()
+                    for synonym in synonyms:
+                        if not utils.is_empty_string(synonym):
+                            session.add(models.InquestKeywordSynonyms(
+                                inquestKeywordId=keyword_id,
+                                synonym=utils.format_as_keyword(synonym),
+                            ))
 
         session.commit()
 
@@ -271,72 +286,81 @@ class Migrator:
         session = self._db_client.get_session()
 
         # Separate authorities by type and sort by export ID
-        rauthorities = []
-        rinquests = []
-        for row in sorted(self._read_workbook('authorities'), key=lambda row: row[-1]):
-            rserial = row[0]
-            rtype = row[3]
+        for row in sorted(self._read_workbook('authorities'), key=lambda row: row[-8]):
+            (rserial, rname, _, rtype, rsynopsis, rkeywords, rtags, rquotes, rnotes, rprimary, _, _,
+                roverview, _, _, rjurisdiction, _, _, rprimarydoc, _, rcited, rrelated, _, _, _,
+                rlastname, rgivennames, rdeathdate, rcause, rinqtype, rpresidingofficer, rsex, rage,
+                rstart, rend, _, _, _, _, _, rdeathmanner, rexport, _, _, _, _, _, _, _) = row
 
-            # TODO: move below logic for creating authorities and inquests here.
             if rtype == self._AUTHORITY_TYPE_AUTHORITY:
-                rauthorities.append(row)
+                inquest_fields = {
+                    'lastname': rlastname,
+                    'givennames': rgivennames,
+                    'deathdate': rdeathdate,
+                    'cause': rcause,
+                    'inqtype': rinqtype,
+                    'presidingofficer': rpresidingofficer,
+                    'sex': rsex,
+                    'age': rage,
+                    'start': rstart,
+                    'end': rend,
+                    'deathmanner': rdeathmanner
+                }
+                non_empty_inquest_fields = [k for k, v in inquest_fields.items() if not utils.is_empty_string(v)]
+                if non_empty_inquest_fields:
+                    logger.warning(
+                        'Authority: %s has non-empty inquest fields: %s.',
+                        rserial, non_empty_inquest_fields
+                    )
+
+                authority_id = self._create_authority(
+                    session, rserial, rname, rsynopsis, rquotes, rnotes, rprimary, roverview, rexport
+                )
+
+                self._authority_serial_to_type[rserial] = self._AUTHORITY_TYPE_AUTHORITY
+                self._authority_serial_to_name[rserial] = utils.format_string(rname)
+                self._authority_serial_to_id[rserial] = authority_id
+                self._authority_serial_to_primary_document[rserial] = rprimarydoc
+                self._authority_serial_to_related[rserial] = (rcited, rrelated)
+
+                self._create_authority_keywords(session, authority_id, rserial, rkeywords)
+                self._create_authority_tags(session, authority_id, rtags)
+
             elif rtype == self._AUTHORITY_TYPE_INQUEST:
-                rinquests.append(row)
+                authority_fields = {
+                    'quotes': rquotes,
+                    'cited': rcited,
+                    'related': rrelated,
+                }
+                non_empty_authority_fields = [k for k, v in authority_fields.items() if not utils.is_empty_string(v)]
+                if non_empty_authority_fields:
+                    logger.warning(
+                        'Inquest: %s has non-empty authority fields: %s.',
+                        rserial, non_empty_authority_fields
+                    )
+
+                inquest_id = self._create_inquest(
+                    session, rserial, rname, rsynopsis, rnotes, rprimary, rjurisdiction,
+                    rpresidingofficer, rstart, rend, rexport
+                )
+
+                self._authority_serial_to_type[rserial] = self._AUTHORITY_TYPE_INQUEST
+                self._authority_serial_to_name[rserial] = utils.format_string(rname.replace('Inquest-', '', 1))
+                self._authority_serial_to_id[rserial] = inquest_id
+
+                self._create_inquest_deceased(
+                    session, inquest_id, rserial, rkeywords, rlastname, rgivennames, rdeathdate, rcause,
+                    rinqtype, rsex, rage, rdeathmanner
+                )
+                self._create_inquest_keywords(session, inquest_id, rserial, rkeywords)
+                self._create_inquest_tags(session, inquest_id, rtags)
+
             else:
                 logger.warning(
                     'Authority: %s has unknown authority type: "%s".',
                     rserial, rtype
                 )
                 continue
-
-        for rauthority in rauthorities:
-            # TODO: ensure inquest-only fields are empty.
-            (rserial, rname, _, _, rsynopsis, rkeywords, rtags, rquotes, rnotes, rprimary, _, _,
-                roverview, _, _, _, _, _, rprimarydoc, _, rcited, rrelated, _, _, _, _, _, _, _, _,
-                _, _, _, _, _, _, _, _, _, _, _, rexport) = rauthority
-
-            authority_id = self._create_authority(
-                session, rserial, rname, rsynopsis, rquotes, rnotes, rprimary, roverview, rexport
-            )
-
-            self._authority_serial_to_type[rserial] = self._AUTHORITY_TYPE_AUTHORITY
-            self._authority_serial_to_name[rserial] = utils.format_string(rname)
-            self._authority_serial_to_id[rserial] = authority_id
-            self._authority_serial_to_primary_document[rserial] = rprimarydoc
-            self._authority_serial_to_related[rserial] = (rcited, rrelated)
-
-            self._create_authority_keywords(session, authority_id, rserial, rkeywords)
-            self._create_authority_tags(session, authority_id, rtags)
-
-        session.commit()
-
-        for rinquest in rinquests:
-            # TODO: ensure authority-only fields are empty.
-            (rserial, rname, _, _, rsynopsis, rkeywords, rtags, _, rnotes, rprimary, _, _, _, _, _,
-                rjurisdiction, _, _, _, _, rcited, rrelated, _, _, _, rlastname, rgivennames,
-                rdeathdate, rcause, rinqtype, rpresidingofficer, rsex, rage, rstart, rend, _, _, _,
-                _, _, rdeathmanner, rexport) = rinquest
-
-            if not utils.is_empty_string(rcited):
-                logger.warning('Inquest: %s has citations, ignoring.', rserial)
-            if not utils.is_empty_string(rrelated):
-                logger.warning('Inquest: %s has related authorities, ignoring.', rserial)
-
-            inquest_id = self._create_inquest(
-                session, rserial, rname, rsynopsis, rnotes, rprimary, rjurisdiction,
-                rpresidingofficer, rstart, rend, rexport
-            )
-
-            self._authority_serial_to_type[rserial] = self._AUTHORITY_TYPE_INQUEST
-            self._authority_serial_to_name[rserial] = utils.format_string(rname.replace('Inquest-', '', 1))
-            self._authority_serial_to_id[rserial] = inquest_id
-
-            self._create_inquest_deceased(
-                session, inquest_id, rserial, rkeywords, rlastname, rgivennames, rdeathdate, rcause,
-                rinqtype, rsex, rage, rdeathmanner
-            )
-            self._create_inquest_keywords(session, inquest_id, rserial, rkeywords)
-            self._create_inquest_tags(session, inquest_id, rtags)
 
         session.commit()
 

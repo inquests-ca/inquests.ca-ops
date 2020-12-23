@@ -52,6 +52,13 @@ class AuthorityKeyword(Base):
     description = Column(String(1000))
 
 
+class AuthorityKeywordSynonyms(Base):
+    __tablename__ = 'authorityKeywordSynonyms'
+
+    authorityKeywordId = Column(CHAR(100), primary_key=True)
+    synonym = Column(String(255), primary_key=True)
+
+
 class AuthorityRelated(Base):
     __tablename__ = 'authorityRelated'
 
@@ -73,6 +80,13 @@ class InquestKeyword(Base):
     inquestCategoryId = Column(CHAR(100))
     name = Column(String(255), nullable=False)
     description = Column(String(1000))
+
+
+class InquestKeywordSynonyms(Base):
+    __tablename__ = 'inquestKeywordSynonyms'
+
+    inquestKeywordId = Column(CHAR(100), primary_key=True)
+    synonym = Column(String(255), primary_key=True)
 
 
 class AuthorityKeywords(Base):

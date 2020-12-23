@@ -17,12 +17,14 @@ def format_as_id(name):
 
 def format_as_keyword(name):
     """Formats string to an appropriate keyword."""
+    formatted = format_string(name)
+
     if is_empty_string(name):
-        return format_string(name)
+        return formatted
 
     # Avoid use of string.capitalize() since it will lowercase all other letters, which is
     # undesired for abbreviations.
-    return name.strip()[0].upper() + name.strip()[1:]
+    return formatted[0].upper() + formatted[1:]
 
 
 def nullable_to_string(string):
